@@ -180,3 +180,16 @@ func TestDNSRESTScopeMiddlewareRejectsPATWithoutDNSScope(t *testing.T) {
 	r.ServeHTTP(response, req)
 	require.Equal(t, http.StatusForbidden, response.Code)
 }
+
+func TestDNSPageLimitDefaultsToCloudflareMaximum(t *testing.T) {
+	limit, err := dnsPageLimit("")
+	require.NoError(t, err)
+	require.Equal(t, uint32(50), limit)
+	_, err = dnsPageLimit("51")
+	require.Error(t, err)
+}
+
+func TestDNSOperationIDUsesDNSPrefix(t *testing.T) {
+	require.NotEqual(t, "", dnsOperationID())
+	require.Contains(t, dnsOperationID(), "dns-")
+}

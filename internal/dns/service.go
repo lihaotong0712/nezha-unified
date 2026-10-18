@@ -187,7 +187,11 @@ func (s *Service) ListRecords(ctx context.Context, execution authz.Execution, re
 	if err != nil {
 		return Page[Record]{}, err
 	}
-	return provider.ListRecords(ctx, binding.Remote, filter, page)
+	result, err := provider.ListRecords(ctx, binding.Remote, filter, page)
+	if err != nil {
+		return Page[Record]{}, fromProviderError(err, execution.OperationID)
+	}
+	return result, nil
 }
 
 func (s *Service) GetRecord(ctx context.Context, execution authz.Execution, ref resource.Ref, id RecordID) (Record, error) {
@@ -204,7 +208,7 @@ func (s *Service) GetRecord(ctx context.Context, execution authz.Execution, ref 
 	}
 	record, err := provider.GetRecord(ctx, binding.Remote, id)
 	if err != nil {
-		return Record{}, platformerr.From(err, execution.OperationID)
+		return Record{}, fromProviderError(err, execution.OperationID)
 	}
 	if _, err := s.check(ctx, execution, authz.View, binding, dnsFacts(binding, record.Name, record.Type)); err != nil {
 		return Record{}, err
@@ -226,7 +230,7 @@ func (s *Service) CreateRecord(ctx context.Context, execution authz.Execution, r
 		return Record{}, err
 	}
 	if err := s.requireCapability(ctx, provider, binding.Remote, FeatureCreateRecord); err != nil {
-		return Record{}, platformerr.From(err, execution.OperationID)
+		return Record{}, fromProviderError(err, execution.OperationID)
 	}
 	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "create-requested", binding.Ref.ID), Time: s.now(), Execution: execution, Action: authz.Edit, Resource: binding.Ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision}); err != nil {
 		return Record{}, err
@@ -234,7 +238,7 @@ func (s *Service) CreateRecord(ctx context.Context, execution authz.Execution, r
 	record, err := provider.(RecordWriter).CreateRecord(ctx, binding.Remote, data)
 	if err != nil {
 		_ = s.recordFailure(ctx, execution, authz.Edit, binding.Ref, decision, binding.Revision, err, "create-failed")
-		return Record{}, platformerr.From(err, execution.OperationID)
+		return Record{}, fromProviderError(err, execution.OperationID)
 	}
 	_ = s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "create-succeeded", string(record.ID)), Time: s.now(), Execution: execution, Action: authz.Edit, Resource: binding.Ref, Outcome: audit.Succeeded, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision})
 	return record, nil
@@ -254,7 +258,7 @@ func (s *Service) UpdateRecord(ctx context.Context, execution authz.Execution, r
 		return Record{}, err
 	}
 	if err := s.requireCapability(ctx, provider, binding.Remote, FeatureUpdateRecord); err != nil {
-		return Record{}, platformerr.From(err, execution.OperationID)
+		return Record{}, fromProviderError(err, execution.OperationID)
 	}
 	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "update-requested", string(before.ID)), Time: s.now(), Execution: execution, Action: authz.Edit, Resource: binding.Ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision}); err != nil {
 		return Record{}, err
@@ -266,7 +270,7 @@ func (s *Service) UpdateRecord(ctx context.Context, execution authz.Execution, r
 	record, err := writer.UpdateRecord(ctx, binding.Remote, before, after)
 	if err != nil {
 		_ = s.recordFailure(ctx, execution, authz.Edit, binding.Ref, decision, binding.Revision, err, "update-failed")
-		return Record{}, platformerr.From(err, execution.OperationID)
+		return Record{}, fromProviderError(err, execution.OperationID)
 	}
 	_ = s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "update-succeeded", string(record.ID)), Time: s.now(), Execution: execution, Action: authz.Edit, Resource: binding.Ref, Outcome: audit.Succeeded, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision})
 	return record, nil
@@ -286,7 +290,7 @@ func (s *Service) DeleteRecord(ctx context.Context, execution authz.Execution, r
 		return err
 	}
 	if err := s.requireCapability(ctx, provider, binding.Remote, FeatureDeleteRecord); err != nil {
-		return platformerr.From(err, execution.OperationID)
+		return fromProviderError(err, execution.OperationID)
 	}
 	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "delete-requested", string(before.ID)), Time: s.now(), Execution: execution, Action: authz.Delete, Resource: binding.Ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision}); err != nil {
 		return err
@@ -297,7 +301,7 @@ func (s *Service) DeleteRecord(ctx context.Context, execution authz.Execution, r
 	}
 	if err := writer.DeleteRecord(ctx, binding.Remote, before); err != nil {
 		_ = s.recordFailure(ctx, execution, authz.Delete, binding.Ref, decision, binding.Revision, err, "delete-failed")
-		return platformerr.From(err, execution.OperationID)
+		return fromProviderError(err, execution.OperationID)
 	}
 	return s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "delete-succeeded", string(before.ID)), Time: s.now(), Execution: execution, Action: authz.Delete, Resource: binding.Ref, Outcome: audit.Succeeded, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision})
 }
@@ -363,7 +367,50 @@ func (s *Service) record(ctx context.Context, event audit.Event) error {
 }
 
 func (s *Service) recordFailure(ctx context.Context, execution authz.Execution, action authz.Action, ref resource.Ref, decision authz.Decision, revision uint64, operation error, stage string) error {
-	return s.record(ctx, audit.Event{ID: eventID(execution.OperationID, stage, ref.ID), Time: s.now(), Execution: execution, Action: action, Resource: ref, Outcome: audit.Failed, Code: platformerr.From(operation, execution.OperationID).Code, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: revision})
+	return s.record(ctx, audit.Event{ID: eventID(execution.OperationID, stage, ref.ID), Time: s.now(), Execution: execution, Action: action, Resource: ref, Outcome: audit.Failed, Code: fromProviderError(operation, execution.OperationID).Code, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: revision})
+}
+
+// fromProviderError converts adapter errors into the public platform error
+// vocabulary. ProviderError.Error is deliberately safe for logs, but callers
+// still need a stable API code and HTTP status rather than an internal error.
+// Unknown errors at a provider boundary are classified as provider failures
+// so implementation details never escape through the Dashboard API.
+func fromProviderError(err error, operationID string) *platformerr.Error {
+	if err == nil {
+		return nil
+	}
+	var providerErr ProviderError
+	if !errors.As(err, &providerErr) {
+		if errors.Is(err, context.Canceled) {
+			return platformerr.New(platformerr.Canceled, operationID, err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return platformerr.New(platformerr.Timeout, operationID, err)
+		}
+		return platformerr.New(platformerr.ProviderFailure, operationID, err)
+	}
+	code := platformerr.ProviderFailure
+	switch providerErr.Code() {
+	case ErrorInvalidArgument:
+		code = platformerr.InvalidArgument
+	case ErrorUnauthenticated:
+		code = platformerr.Unauthenticated
+	case ErrorPermission:
+		code = platformerr.Forbidden
+	case ErrorNotFound:
+		code = platformerr.NotFound
+	case ErrorConflict:
+		code = platformerr.Conflict
+	case ErrorRateLimited, ErrorUnavailable:
+		code = platformerr.Unavailable
+	case ErrorCanceled:
+		code = platformerr.Canceled
+	case ErrorDeadline:
+		code = platformerr.Timeout
+	case ErrorUnsupported, ErrorProvider:
+		code = platformerr.ProviderFailure
+	}
+	return platformerr.New(code, operationID, err)
 }
 
 func eventID(operation, stage, id string) string {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/nezhahq/nezha/internal/audit"
 	"github.com/nezhahq/nezha/internal/authz"
@@ -21,6 +22,7 @@ import (
 	"github.com/nezhahq/nezha/internal/credential"
 	"github.com/nezhahq/nezha/internal/dns"
 	"github.com/nezhahq/nezha/internal/dns/cloudflare"
+	"github.com/nezhahq/nezha/internal/platformerr"
 	"github.com/nezhahq/nezha/internal/resource"
 	"github.com/nezhahq/nezha/internal/workflow"
 	"github.com/nezhahq/nezha/model"
@@ -182,7 +184,7 @@ func NewServices(db *gorm.DB, keyPath string) (*Services, error) {
 	}
 	dnsService := dns.NewService(dnsBindings, authorizer, recorder, func(ctx context.Context, execution authz.Execution, action authz.Action, binding dns.ZoneBinding) (dns.Provider, error) {
 		if binding.Provider != "cloudflare" {
-			return nil, fmt.Errorf("unsupported DNS provider %q", binding.Provider)
+			return nil, platformerr.New(platformerr.ProviderFailure, execution.OperationID, nil)
 		}
 		metadata, err := credentials.ListMetadata(ctx, binding.OwnerID)
 		if err != nil {
@@ -208,11 +210,24 @@ func NewServices(db *gorm.DB, keyPath string) (*Services, error) {
 		}
 		if err := credentials.WithSecret(ctx, request, func(_ context.Context, resolved credential.Resolved) error {
 			if expected != credential.Type("cloudflare.api_token") {
-				return fmt.Errorf("unsupported Cloudflare credential type %q", expected)
+				return platformerr.New(platformerr.CredentialVersionInvalid, execution.OperationID, nil)
 			}
-			provider = cloudflare.New(string(resolved.Secret.Bytes()))
+			token := strings.TrimSpace(string(resolved.Secret.Bytes()))
+			if token == "" {
+				return platformerr.New(platformerr.CredentialVersionInvalid, execution.OperationID, nil)
+			}
+			provider = cloudflare.New(token)
 			return nil
 		}); err != nil {
+			if errors.Is(err, credential.ErrCredentialNotFound) {
+				return nil, platformerr.New(platformerr.NotFound, execution.OperationID, err)
+			}
+			if errors.Is(err, credential.ErrCredentialDisabled) || errors.Is(err, credential.ErrCredentialDeleted) {
+				return nil, platformerr.New(platformerr.CredentialDisabled, execution.OperationID, err)
+			}
+			if errors.Is(err, credential.ErrVersionRevoked) || errors.Is(err, credential.ErrCredentialType) {
+				return nil, platformerr.New(platformerr.CredentialVersionInvalid, execution.OperationID, err)
+			}
 			return nil, err
 		}
 		return provider, nil

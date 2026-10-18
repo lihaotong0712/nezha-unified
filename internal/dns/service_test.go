@@ -8,6 +8,7 @@ import (
 
 	"github.com/nezhahq/nezha/internal/audit"
 	"github.com/nezhahq/nezha/internal/authz"
+	"github.com/nezhahq/nezha/internal/platformerr"
 	"github.com/nezhahq/nezha/internal/resource"
 )
 
@@ -140,4 +141,48 @@ func TestMemoryStoreRejectsDeletedAndDuplicateBindings(t *testing.T) {
 		// a caller cannot mark a stored item deleted by mutating its input value.
 		t.Fatal(err)
 	}
+}
+
+type serviceProviderError struct{ code ErrorCode }
+
+func (e serviceProviderError) Error() string             { return "provider error" }
+func (e serviceProviderError) Code() ErrorCode           { return e.code }
+func (e serviceProviderError) VendorCode() string        { return "" }
+func (e serviceProviderError) RequestID() string         { return "request-id" }
+func (e serviceProviderError) RetryAfter() time.Duration { return 0 }
+func (e serviceProviderError) Outcome() WriteOutcome     { return OutcomeNotApplied }
+func (e serviceProviderError) RecordID() RecordID        { return "" }
+
+func TestServiceMapsProviderErrorsToSafePlatformCodes(t *testing.T) {
+	store := NewMemoryStore()
+	binding := testBinding()
+	if err := store.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+	authorizer := &serviceAuthorizer{allowed: true}
+	provider := testProvider()
+	service := NewService(store, authorizer, nil, func(context.Context, authz.Execution, authz.Action, ZoneBinding) (Provider, error) {
+		return providerWithListError{provider: provider}, nil
+	})
+	_, err := service.ListRecords(context.Background(), testExecution(), binding.Ref, RecordFilter{}, PageRequest{Limit: 1})
+	var public *platformerr.Error
+	if !errors.As(err, &public) || public.Code != platformerr.NotFound {
+		t.Fatalf("provider error = %v, want not_found", err)
+	}
+}
+
+type providerWithListError struct{ provider *serviceProvider }
+
+func (p providerWithListError) ListZones(context.Context, PageRequest) (Page[Zone], error) {
+	return Page[Zone]{}, nil
+}
+func (p providerWithListError) GetZone(context.Context, ZoneID) (Zone, error) { return Zone{}, nil }
+func (p providerWithListError) Capabilities(context.Context, Zone) (Capabilities, error) {
+	return p.provider.capabilities, nil
+}
+func (p providerWithListError) GetRecord(context.Context, Zone, RecordID) (Record, error) {
+	return Record{}, nil
+}
+func (p providerWithListError) ListRecords(context.Context, Zone, RecordFilter, PageRequest) (Page[Record], error) {
+	return Page[Record]{}, serviceProviderError{code: ErrorNotFound}
 }

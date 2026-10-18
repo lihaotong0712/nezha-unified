@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hashicorp/go-uuid"
 
 	"github.com/nezhahq/nezha/internal/authz"
 	"github.com/nezhahq/nezha/internal/dns"
@@ -46,7 +48,7 @@ func dnsExecution(c *gin.Context) (authz.Execution, error) {
 		return authz.Execution{}, platformerr.New(platformerr.Unauthenticated, "", nil)
 	}
 	principal := authz.User(user.ID)
-	execution := authz.Execution{Subject: principal, TriggeredBy: principal, Entry: authz.Session, OperationID: certificateOperationID()}
+	execution := authz.Execution{Subject: principal, TriggeredBy: principal, Entry: authz.Session, OperationID: dnsOperationID()}
 	if token := APITokenFromContext(c); token != nil {
 		execution.Entry = authz.PAT
 		execution.TokenID = token.ID
@@ -55,6 +57,18 @@ func dnsExecution(c *gin.Context) (authz.Execution, error) {
 		return authz.Execution{}, platformerr.New(platformerr.Unauthenticated, execution.OperationID, err)
 	}
 	return execution, nil
+}
+
+var dnsOperationCounter uint64
+
+func dnsOperationID() string {
+	id, err := uuid.GenerateUUID()
+	if err == nil && id != "" {
+		return "dns-" + id
+	}
+	// UUID generation failure is extraordinarily unlikely. Keep the operation
+	// valid and unique enough for audit correlation without exposing internals.
+	return "dns-" + strconv.FormatUint(atomic.AddUint64(&dnsOperationCounter, 1), 10)
 }
 
 func requireDNSService(execution authz.Execution) (*dns.Service, error) {
@@ -214,11 +228,11 @@ func deleteDNSRecord(c *gin.Context) (any, error) {
 
 func dnsPageLimit(raw string) (uint32, error) {
 	if strings.TrimSpace(raw) == "" {
-		return 100, nil
+		return 50, nil
 	}
 	value, err := strconv.ParseUint(raw, 10, 32)
-	if err != nil || value == 0 || value > 1000 {
-		return 0, errors.New("limit must be between 1 and 1000")
+	if err != nil || value == 0 || value > 50 {
+		return 0, errors.New("limit must be between 1 and 50")
 	}
 	return uint32(value), nil
 }
