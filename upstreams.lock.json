@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "name": "nezha",
+      "repository": "https://github.com/nezhahq/nezha",
+      "version": "v2.3.18",
+      "commit": "9881c47f0cc92256ba203919da5a25fab79a6bad",
+      "destination": "."
+    },
+    {
+      "name": "admin-frontend",
+      "repository": "https://github.com/nezhahq/admin-frontend",
+      "version": "v2.3.8",
+      "commit": "346574968cf4ecec605a74fe503814138a927b3d",
+      "destination": "web/admin"
+    },
+    {
+      "name": "certimate",
+      "repository": "https://github.com/certimate-go/certimate",
+      "version": "v0.4.35",
+      "commit": "884b353c7e2a5331ca24ff61bc18dea291cd8d91",
+      "destination": null
+    },
+    {
+      "name": "dnsmgr",
+      "repository": "https://github.com/netcccyun/dnsmgr",
+      "version": "2.21-3-g78e77a6",
+      "commit": "78e77a608fe37c3f7bbbfe35f732bfdf1de43bdd",
+      "destination": null
+    }
+  ],
+  "public_frontends": [
+    {
+      "path": "user-dist",
+      "repository": "https://github.com/hamster1963/nezha-dash-v2",
+      "version": "v2.4.3",
+      "url": "https://github.com/hamster1963/nezha-dash-v2/releases/download/v2.4.3/dist.zip",
+      "sha256": "9fd9aa513a4a6ce878dfecad49519f686017b24ef48278af0c9e8156932c0e88"
+    },
+    {
+      "path": "nezha-pixel-dist",
+      "repository": "https://github.com/karllao/nezha-pixel",
+      "version": "v1.6.0",
+      "url": "https://github.com/karllao/nezha-pixel/releases/download/v1.6.0/dist.zip",
+      "sha256": "009fbf30ef5ba213118f0235429ec3c4a684fda81d9e5bc890fb9ed2dc78f1fd"
+    },
+    {
+      "path": "nazhua-dist",
+      "repository": "https://github.com/hi2shark/nazhua",
+      "version": "v1.2.0",
+      "url": "https://github.com/hi2shark/nazhua/releases/download/v1.2.0/dist.zip",
+      "sha256": "eee65de362d91aeaf63c82ae0acb72a1036e260b75d525ee1a014c00378025d8"
+    },
+    {
+      "path": "aobobo-dist",
+      "repository": "https://github.com/hi2shark/aobobo",
+      "version": "v1.5.1",
+      "url": "https://github.com/hi2shark/aobobo/releases/download/v1.5.1/dist.zip",
+      "sha256": "55253271e5bfd3314aa036de32dd53000b78fe67e52e2c892b84b8587d566ed3"
+    },
+    {
+      "path": "nezha-ascii-dist",
+      "repository": "https://github.com/hamster1963/nezha-ascii",
+      "version": "v1.1.0",
+      "url": "https://github.com/hamster1963/nezha-ascii/releases/download/v1.1.0/dist.zip",
+      "sha256": "e9a33e1a7141fa37512fbebc257d8b6640f1e20ec77db5f585c85cb9f5f4e40a"
+    }
+  ]
+}

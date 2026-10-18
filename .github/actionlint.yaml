@@ -1,0 +1,4 @@
+# actionlint v1.7.12 的内置列表尚未包含本项目要求的 runner 标签。
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

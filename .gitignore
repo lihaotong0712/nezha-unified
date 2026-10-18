@@ -1,1 +1,14 @@
 /upstream
+/.cache/
+/dist/
+/data/
+/dashboard
+*.test
+*.out
+*.pprof
+.DS_Store
+.idea/
+/cmd/dashboard/docs/
+/cmd/dashboard/*-dist/*
+!/cmd/dashboard/admin-dist/.gitkeep
+!/cmd/dashboard/user-dist/.gitkeep

@@ -1,0 +1,18 @@
+{
+    "files": [],
+    "references": [
+        {
+            "path": "./tsconfig.app.json"
+        },
+        {
+            "path": "./tsconfig.node.json"
+        }
+    ],
+    "compilerOptions": {
+        "ignoreDeprecations": "6.0",
+        // TypeScript 7 resolves paths relative to this config; baseUrl was removed.
+        "paths": {
+            "@/*": ["./src/*"]
+        }
+    }
+}
