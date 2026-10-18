@@ -27,6 +27,14 @@ type testRecorder struct {
 	fail   atomic.Bool
 }
 
+type testResourceLookup struct {
+	metadata resource.Metadata
+}
+
+func (r *testResourceLookup) Get(context.Context, resource.Ref) (resource.Metadata, error) {
+	return r.metadata, nil
+}
+
 func (r *testRecorder) Record(_ context.Context, event audit.Event) error {
 	if r.fail.Load() {
 		return errors.New("audit storage unavailable")
@@ -126,6 +134,28 @@ func TestStoreWithSecretDestroysSecretAndReturnsOnlyMetadata(t *testing.T) {
 	}
 	if len(records) != 1 {
 		t.Fatalf("stored %d credential records", len(records))
+	}
+}
+
+func TestStoreUsesAuthoritativeResourceProjection(t *testing.T) {
+	store, _, _ := newCredentialStore(t, true)
+	createTestCredential(t, store)
+	lookup := &testResourceLookup{metadata: resource.Metadata{Ref: resource.Ref{Kind: resource.Credential, ID: "cred-1"}, OwnerID: 7, Revision: 9, State: resource.Active}}
+	store.SetResourceLookup(lookup)
+	metadata, err := store.Metadata(context.Background(), "cred-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Resource.Revision != 9 || metadata.Resource.OwnerID != 7 {
+		t.Fatalf("registry projection not used: %+v", metadata.Resource)
+	}
+	lookup.metadata.State = resource.Disabled
+	if err := store.WithSecret(context.Background(), testUseRequest("cred-1", 1), func(context.Context, Resolved) error { return nil }); !errors.Is(err, ErrCredentialDisabled) {
+		t.Fatalf("disabled registry resource = %v", err)
+	}
+	lookup.metadata.Ref.ID = "wrong-id"
+	if _, err := store.Metadata(context.Background(), "cred-1"); !errors.Is(err, ErrResourceMismatch) {
+		t.Fatalf("mismatched registry resource = %v", err)
 	}
 }
 

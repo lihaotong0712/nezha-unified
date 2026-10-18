@@ -35,7 +35,7 @@ func NewAESGCMProtector(keyID string, key []byte) (*AESGCMProtector, error) {
 	if keyID == "" {
 		return nil, errors.New("credential encryption key ID is required")
 	}
-	block, err := aes.NewCipher(append([]byte(nil), key...))
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("create credential encryption key: %w", err)
 	}
@@ -52,7 +52,7 @@ func (p *AESGCMProtector) AddKey(keyID string, key []byte) error {
 	if p == nil || keyID == "" {
 		return errors.New("credential encryption key ID is required")
 	}
-	block, err := aes.NewCipher(append([]byte(nil), key...))
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return fmt.Errorf("create credential encryption key: %w", err)
 	}
@@ -64,6 +64,9 @@ func (p *AESGCMProtector) AddKey(keyID string, key []byte) error {
 	defer p.mu.Unlock()
 	if p.keys[keyID] != nil {
 		return ErrKeyExists
+	}
+	if p.keys == nil {
+		p.keys = make(map[string]cipher.AEAD)
 	}
 	p.keys[keyID] = aead
 	return nil
@@ -99,7 +102,7 @@ func (p *AESGCMProtector) Seal(ctx context.Context, credential resource.Ref, ver
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return EncryptedSecret{}, fmt.Errorf("generate credential nonce: %w", err)
 	}
-	ciphertext := aead.Seal(nil, nonce, secret.Bytes(), associatedData(credential, version))
+	ciphertext := aead.Seal(nil, nonce, secret.Bytes(), associatedData(credential, version, keyID))
 	return EncryptedSecret{KeyID: keyID, Algorithm: "AES-GCM", Nonce: nonce, Ciphertext: ciphertext}, nil
 }
 
@@ -119,7 +122,7 @@ func (p *AESGCMProtector) Open(ctx context.Context, credential resource.Ref, ver
 	if len(encrypted.Nonce) != aead.NonceSize() || len(encrypted.Ciphertext) < aead.Overhead() {
 		return nil, ErrInvalidEnvelope
 	}
-	plaintext, err := aead.Open(nil, encrypted.Nonce, encrypted.Ciphertext, associatedData(credential, version))
+	plaintext, err := aead.Open(nil, encrypted.Nonce, encrypted.Ciphertext, associatedData(credential, version, encrypted.KeyID))
 	if err != nil {
 		return nil, ErrInvalidEnvelope
 	}
@@ -127,7 +130,7 @@ func (p *AESGCMProtector) Open(ctx context.Context, credential resource.Ref, ver
 	return NewSecret(plaintext), nil
 }
 
-func associatedData(credential resource.Ref, version uint64) []byte {
+func associatedData(credential resource.Ref, version uint64, keyID string) []byte {
 	// A hash gives the AEAD a fixed-size context while retaining domain
 	// separation and preserving the exact resource ID and version.
 	h := sha256.New()
@@ -135,6 +138,8 @@ func associatedData(credential resource.Ref, version uint64) []byte {
 	_ = binary.Write(h, binary.BigEndian, uint16(len(credential.ID)))
 	_, _ = h.Write([]byte(credential.ID))
 	_ = binary.Write(h, binary.BigEndian, version)
+	_ = binary.Write(h, binary.BigEndian, uint64(len(keyID)))
+	_, _ = h.Write([]byte(keyID))
 	return h.Sum(nil)
 }
 

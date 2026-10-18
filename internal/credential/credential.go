@@ -70,6 +70,14 @@ func (r UseRequest) Validate() error {
 	if request.Validate() != nil || r.Credential.Resource().Validate() != nil || r.Binding.Consumer.Validate() != nil || strings.TrimSpace(string(r.ExpectedType)) == "" {
 		return errors.New("invalid credential use request")
 	}
+	// Normal resolution never grants plaintext reveal/export. Destructive
+	// target operations can still use credentials after their own permission
+	// check, while credential administration uses separate service methods.
+	switch r.Action {
+	case authz.View, authz.Edit, authz.Execute, authz.Delete, authz.Use:
+	default:
+		return errors.New("invalid credential use action")
+	}
 	switch r.Binding.Purpose {
 	case DNSManage, DNSChallenge, CertificateIssue, CertificateDeploy, NotificationSend:
 		return nil

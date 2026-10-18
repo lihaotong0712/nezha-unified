@@ -69,6 +69,7 @@ func TestCredentialUseRequiresTypePurposeConsumerAndTarget(t *testing.T) {
 		func(r *UseRequest) { r.Binding.Target = resource.Ref{} },
 		func(r *UseRequest) { r.Credential.ID = "" },
 		func(r *UseRequest) { r.Execution.TokenID = 9 },
+		func(r *UseRequest) { r.Action = authz.Reveal },
 	} {
 		candidate := r
 		change(&candidate)

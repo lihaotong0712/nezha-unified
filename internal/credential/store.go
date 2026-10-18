@@ -27,6 +27,7 @@ var (
 	ErrAuditMissing         = errors.New("credential audit recorder is unavailable")
 	ErrAuditFailed          = errors.New("credential audit record failed")
 	ErrInvalidCredential    = errors.New("invalid credential")
+	ErrResourceMismatch     = errors.New("credential resource registry returned invalid metadata")
 )
 
 const (
@@ -129,6 +130,9 @@ func (s *Store) SetAuthorizer(authorizer authz.Authorizer) {
 }
 
 func (s *Store) SetRecorder(recorder audit.Recorder) {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
 	s.recorder = recorder
 	s.mu.Unlock()
@@ -137,6 +141,9 @@ func (s *Store) SetRecorder(recorder audit.Recorder) {
 // SetResourceLookup connects the authoritative platform registry. When set,
 // local owner/state values are projections and never override that registry.
 func (s *Store) SetResourceLookup(lookup ResourceLookup) {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
 	s.lookup = lookup
 	s.mu.Unlock()
@@ -311,6 +318,9 @@ func (s *Store) Delete(ctx context.Context, ref Ref) error {
 }
 
 func (s *Store) Metadata(ctx context.Context, id string) (Metadata, error) {
+	if s == nil || s.db == nil {
+		return Metadata{}, ErrInvalidCredential
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var record Record
@@ -321,14 +331,17 @@ func (s *Store) Metadata(ctx context.Context, id string) (Metadata, error) {
 	if err := s.db.WithContext(ctx).Where("credential_id = ?", id).Find(&bindings).Error; err != nil {
 		return Metadata{}, err
 	}
-	return metadataFromRecord(record, bindingsToValues(bindings)), nil
+	return s.projectMetadata(ctx, record, bindingsToValues(bindings))
 }
 
 func (s *Store) ListMetadata(ctx context.Context, ownerID uint64) ([]Metadata, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrInvalidCredential
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	query := s.db.WithContext(ctx).Order("created_at ASC")
-	if ownerID != 0 {
+	if ownerID != 0 && s.lookup == nil {
 		query = query.Where("owner_id = ?", ownerID)
 	}
 	var records []Record
@@ -341,7 +354,13 @@ func (s *Store) ListMetadata(ctx context.Context, ownerID uint64) ([]Metadata, e
 		if err := s.db.WithContext(ctx).Where("credential_id = ?", record.ID).Find(&bindings).Error; err != nil {
 			return nil, err
 		}
-		result = append(result, metadataFromRecord(record, bindingsToValues(bindings)))
+		metadata, err := s.projectMetadata(ctx, record, bindingsToValues(bindings))
+		if err != nil {
+			return nil, err
+		}
+		if ownerID == 0 || metadata.Resource.OwnerID == ownerID {
+			result = append(result, metadata)
+		}
 	}
 	return result, nil
 }
@@ -380,7 +399,10 @@ func (s *Store) WithSecret(ctx context.Context, request UseRequest, fn func(cont
 		if err != nil {
 			return err
 		}
-		if metadata.Ref != request.Credential.Resource() || !metadata.Executable() {
+		if metadata.Ref != request.Credential.Resource() {
+			return ErrResourceMismatch
+		}
+		if !metadata.Executable() {
 			return ErrCredentialDisabled
 		}
 	}
@@ -502,6 +524,21 @@ func metadataFromRecord(record Record, bindings []Binding) Metadata {
 		state = resource.Pending
 	}
 	return Metadata{Resource: resource.Metadata{Ref: resource.Ref{Kind: resource.Credential, ID: record.ID}, OwnerID: record.OwnerID, Revision: record.Revision, State: state, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, DeletedAt: record.DeletedAt}, Name: record.Name, Type: Type(record.Type), CurrentVersion: record.CurrentVersion, Bindings: bindings}
+}
+
+func (s *Store) projectMetadata(ctx context.Context, record Record, bindings []Binding) (Metadata, error) {
+	metadata := metadataFromRecord(record, bindings)
+	if s.lookup != nil {
+		registered, err := s.lookup.Get(ctx, metadata.Resource.Ref)
+		if err != nil {
+			return Metadata{}, err
+		}
+		if registered.Ref != metadata.Resource.Ref || registered.OwnerID == 0 || registered.Revision == 0 {
+			return Metadata{}, ErrResourceMismatch
+		}
+		metadata.Resource = registered
+	}
+	return metadata, nil
 }
 
 func translateNotFound(err error) error {
