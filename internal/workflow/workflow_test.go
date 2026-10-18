@@ -49,6 +49,90 @@ func TestValidateDefinitionCanonicalDigest(t *testing.T) {
 		t.Fatal("array definition accepted")
 	}
 }
+
+func TestCreateRollsBackWorkflowWhenInitialVersionFails(t *testing.T) {
+	s := NewService(newStore(t), allowAuthorizer{}, nil)
+	if err := s.store.(*GORMStore).db.Exec(`CREATE TRIGGER fail_workflow_version_insert BEFORE INSERT ON platform_workflow_versions BEGIN SELECT RAISE(ABORT, 'version insert failed'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Create(context.Background(), CreateRequest{Execution: testExecution(), OwnerID: 7, Name: "rollback", Definition: json.RawMessage(`{"nodes":[]}`)})
+	if err == nil {
+		t.Fatal("create succeeded despite version insert failure")
+	}
+	var workflows, versions int64
+	db := s.store.(*GORMStore).db
+	if err := db.Model(&workflowRow{}).Count(&workflows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&versionRow{}).Count(&versions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if workflows != 0 || versions != 0 {
+		t.Fatalf("transaction left rows: workflows=%d versions=%d", workflows, versions)
+	}
+}
+
+func TestSaveVersionAtomicRollsBackRevisionAndRejectsStaleWriter(t *testing.T) {
+	s := NewService(newStore(t), allowAuthorizer{}, nil)
+	ctx := context.Background()
+	e := testExecution()
+	w, err := s.Create(ctx, CreateRequest{Execution: e, OwnerID: 7, Name: "versions", Definition: json.RawMessage(`{"nodes":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := s.store.(*GORMStore)
+	if err := store.db.Exec(`CREATE TRIGGER fail_workflow_version_insert BEFORE INSERT ON platform_workflow_versions BEGIN SELECT RAISE(ABORT, 'version insert failed'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.SaveVersion(ctx, e, w.Ref, json.RawMessage(`{"nodes":[{"type":"issue"}]}`))
+	if err == nil {
+		t.Fatal("save succeeded despite version insert failure")
+	}
+	current, err := store.Get(ctx, w.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Revision != w.Revision {
+		t.Fatalf("revision changed after rollback: got %d want %d", current.Revision, w.Revision)
+	}
+	versions, err := store.ListVersions(ctx, w.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("version rows after rollback = %d", len(versions))
+	}
+	if err := store.db.Exec(`DROP TRIGGER fail_workflow_version_insert`).Error; err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.SaveVersionAtomic(ctx, current, Version{Workflow: w.Ref, State: VersionDraft, Definition: json.RawMessage(`{"nodes":[{"type":"issue"}]}`), Digest: mustDigest(t, json.RawMessage(`{"nodes":[{"type":"issue"}]}`)), CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Number != 2 {
+		t.Fatalf("first new version number = %d", first.Number)
+	}
+	if _, err := store.SaveVersionAtomic(ctx, current, Version{Workflow: w.Ref, State: VersionDraft, Definition: json.RawMessage(`{"nodes":[{"type":"issue"}]}`), Digest: first.Digest, CreatedAt: time.Now().UTC()}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale writer error = %v", err)
+	}
+	current, err = store.Get(ctx, w.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Revision != w.Revision+1 {
+		t.Fatalf("revision after successful save = %d want %d", current.Revision, w.Revision+1)
+	}
+}
+
+func mustDigest(t *testing.T, definition []byte) string {
+	t.Helper()
+	_, digest, err := ValidateDefinition(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
 func TestWorkflowLifecyclePersistsVersionSnapshotAndRun(t *testing.T) {
 	s := NewService(newStore(t), allowAuthorizer{}, nil)
 	ctx := context.Background()
@@ -119,5 +203,86 @@ func TestRunTransitionValidation(t *testing.T) {
 	r := Run{Ref: resource.Ref{Kind: resource.WorkflowRun, ID: "r"}, Workflow: resource.Ref{Kind: resource.Workflow, ID: "w"}, Version: 1, OwnerID: 7, State: RunPending, Execution: testExecution(), Definition: json.RawMessage(`{"nodes":[]}`), Digest: "bad", Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if r.Validate() == nil {
 		t.Fatal("invalid digest accepted")
+	}
+}
+
+func TestPublishIsIdempotentAndRunRevisionIsOptimistic(t *testing.T) {
+	s := NewService(newStore(t), allowAuthorizer{}, nil)
+	ctx := context.Background()
+	e := testExecution()
+	w, err := s.Create(ctx, CreateRequest{Execution: e, OwnerID: 7, Name: "publish", Definition: json.RawMessage(`{"nodes":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := s.store.(*GORMStore)
+	published, err := store.PublishVersion(ctx, w.Ref, 1, w.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.PublishVersion(ctx, w.Ref, 1, published.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Revision != published.Revision || again.CurrentVersion != 1 {
+		t.Fatalf("idempotent publish = %+v, first = %+v", again, published)
+	}
+	if _, err := store.PublishVersion(ctx, w.Ref, 1, w.Revision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale publish = %v", err)
+	}
+
+	run, err := s.StartRun(ctx, StartRunRequest{Execution: e, Workflow: w.Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.GetRun(ctx, run.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	first.State = RunRunning
+	first.UpdatedAt = time.Now().UTC()
+	if _, err := store.UpdateRun(ctx, first, first.Revision); err != nil {
+		t.Fatal(err)
+	}
+	second.State = RunCanceled
+	second.UpdatedAt = time.Now().UTC()
+	if _, err := store.UpdateRun(ctx, second, second.Revision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale run update = %v", err)
+	}
+}
+
+func TestRunKeepsImmutableDefinitionAcrossVersionPublish(t *testing.T) {
+	s := NewService(newStore(t), allowAuthorizer{}, nil)
+	ctx := context.Background()
+	e := testExecution()
+	w, err := s.Create(ctx, CreateRequest{Execution: e, OwnerID: 7, Name: "snapshot", Definition: json.RawMessage(`{"nodes":[{"type":"first"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish(ctx, e, w.Ref, 1); err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.StartRun(ctx, StartRunRequest{Execution: e, Workflow: w.Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := append([]byte(nil), run.Definition...)
+	current, err := s.Get(ctx, e, w.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := s.SaveVersion(ctx, e, w.Ref, json.RawMessage(`{"nodes":[{"type":"second"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish(ctx, e, w.Ref, v2.Number); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetRun(ctx, e, run.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Version != current.CurrentVersion || string(stored.Definition) != string(before) || stored.Digest != run.Digest {
+		t.Fatalf("run snapshot changed: got version=%d definition=%s digest=%s", stored.Version, stored.Definition, stored.Digest)
 	}
 }

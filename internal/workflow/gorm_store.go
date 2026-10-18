@@ -96,6 +96,29 @@ func runFromRow(r runRow) Run {
 	return Run{Ref: resource.Ref{Kind: resource.WorkflowRun, ID: r.RefID}, Workflow: resource.Ref{Kind: resource.Workflow, ID: r.WorkflowID}, Version: r.Version, OwnerID: r.OwnerID, State: RunState(r.State), Execution: authz.Execution{Subject: authz.Principal{Kind: authz.PrincipalKind(r.SubjectKind), ID: r.SubjectID}, TriggeredBy: authz.Principal{Kind: authz.PrincipalKind(r.TriggeredByKind), ID: r.TriggeredByID}, Entry: authz.Entry(r.Entry), TokenID: r.TokenID, SourceGrantID: r.SourceGrantID, OperationID: r.OperationID}, Definition: append([]byte(nil), r.Definition...), Digest: r.Digest, ErrorCode: r.ErrorCode, ErrorMessage: r.ErrorMessage, Revision: r.Revision, CreatedAt: r.CreatedAt.UTC(), StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, UpdatedAt: r.UpdatedAt.UTC()}
 }
 
+func (s *GORMStore) CreateWithVersion(ctx context.Context, w Workflow, v Version) error {
+	if s == nil || s.db == nil || w.Validate() != nil || v.Validate() != nil || v.Workflow != w.Ref {
+		return ErrInvalidWorkflow
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		workflowRow := workflowRowFrom(w)
+		if err := tx.Create(&workflowRow).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		versionRow := versionRowFrom(v)
+		if err := tx.Create(&versionRow).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		return nil
+	})
+}
+
 func (s *GORMStore) Create(ctx context.Context, w Workflow) error {
 	if s == nil || s.db == nil || w.Validate() != nil {
 		return ErrInvalidWorkflow
@@ -144,7 +167,10 @@ func (s *GORMStore) Update(ctx context.Context, w Workflow, expected uint64) (Wo
 	if w.Validate() != nil || expected == 0 {
 		return Workflow{}, ErrInvalidWorkflow
 	}
-	now := time.Now().UTC()
+	now := w.UpdatedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	q := s.db.WithContext(ctx).Model(&workflowRow{}).Where("ref_id = ? AND revision = ?", w.Ref.ID, expected).Updates(map[string]any{"name": w.Name, "state": string(w.State), "current_version": w.CurrentVersion, "revision": expected + 1, "updated_at": now, "deleted_at": w.DeletedAt})
 	if q.Error != nil {
 		return Workflow{}, q.Error
@@ -175,6 +201,59 @@ func (s *GORMStore) Delete(ctx context.Context, ref resource.Ref, expected uint6
 		return ErrConflict
 	}
 	return nil
+}
+
+func (s *GORMStore) SaveVersionAtomic(ctx context.Context, w Workflow, v Version) (Version, error) {
+	if s == nil || s.db == nil || w.Validate() != nil || v.Workflow != w.Ref || v.State != VersionDraft || v.Digest == "" {
+		return Version{}, ErrInvalidWorkflow
+	}
+	normalized, digest, err := ValidateDefinition(v.Definition)
+	if err != nil || digest != v.Digest || string(normalized) != string(v.Definition) {
+		return Version{}, ErrInvalidDefinition
+	}
+	var out Version
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row workflowRow
+		if err := tx.First(&row, "ref_id = ?", w.Ref.ID).Error; err != nil {
+			return translate(err, ErrNotFound)
+		}
+		if row.Revision != w.Revision || row.State == string(StateDeleted) {
+			return ErrConflict
+		}
+		// Advance the workflow revision first. The optimistic predicate serializes
+		// concurrent writers and rolls back if version insertion fails.
+		updatedAt := v.CreatedAt.UTC()
+		if updatedAt.IsZero() {
+			updatedAt = time.Now().UTC()
+			v.CreatedAt = updatedAt
+		}
+		q := tx.Model(&workflowRow{}).Where("ref_id = ? AND revision = ?", w.Ref.ID, w.Revision).Updates(map[string]any{"revision": w.Revision + 1, "updated_at": updatedAt})
+		if q.Error != nil {
+			return q.Error
+		}
+		if q.RowsAffected != 1 {
+			return ErrConflict
+		}
+		var latest versionRow
+		err := tx.Where("workflow_id = ?", w.Ref.ID).Order("number DESC").First(&latest).Error
+		n := uint64(1)
+		if err == nil {
+			n = latest.Number + 1
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		v.Number = n
+		versionRow := versionRowFrom(v)
+		if err := tx.Create(&versionRow).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, err
 }
 
 func (s *GORMStore) CreateVersion(ctx context.Context, v Version) error {
@@ -235,15 +314,29 @@ func (s *GORMStore) PublishVersion(ctx context.Context, ref resource.Ref, n, exp
 			return translate(err, ErrVersionNotFound)
 		}
 		if v.State == string(VersionPublished) {
+			if w.CurrentVersion != n {
+				return ErrConflict
+			}
 			out = workflowFromRow(w)
 			return nil
 		}
-		now := time.Now().UTC()
-		if err := tx.Model(&versionRow{}).Where("workflow_id = ? AND number = ? AND state = ?", ref.ID, n, string(VersionDraft)).Updates(map[string]any{"state": string(VersionPublished), "published_at": now}).Error; err != nil {
-			return err
+		if v.State != string(VersionDraft) {
+			return ErrConflict
 		}
-		if err := tx.Model(&workflowRow{}).Where("ref_id = ? AND revision = ?", ref.ID, expected).Updates(map[string]any{"state": string(StateActive), "current_version": n, "revision": expected + 1, "updated_at": now}).Error; err != nil {
-			return err
+		now := time.Now().UTC()
+		q := tx.Model(&versionRow{}).Where("workflow_id = ? AND number = ? AND state = ?", ref.ID, n, string(VersionDraft)).Updates(map[string]any{"state": string(VersionPublished), "published_at": now})
+		if q.Error != nil {
+			return q.Error
+		}
+		if q.RowsAffected != 1 {
+			return ErrConflict
+		}
+		q = tx.Model(&workflowRow{}).Where("ref_id = ? AND revision = ?", ref.ID, expected).Updates(map[string]any{"state": string(StateActive), "current_version": n, "revision": expected + 1, "updated_at": now})
+		if q.Error != nil {
+			return q.Error
+		}
+		if q.RowsAffected != 1 {
+			return ErrConflict
 		}
 		w.Revision++
 		w.CurrentVersion = n
@@ -299,7 +392,10 @@ func (s *GORMStore) UpdateRun(ctx context.Context, r Run, expected uint64) (Run,
 	if r.Validate() != nil || expected == 0 {
 		return Run{}, ErrInvalidWorkflow
 	}
-	now := time.Now().UTC()
+	now := r.UpdatedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	q := s.db.WithContext(ctx).Model(&runRow{}).Where("ref_id = ? AND revision = ?", r.Ref.ID, expected).Updates(map[string]any{"state": string(r.State), "error_code": r.ErrorCode, "error_message": r.ErrorMessage, "revision": expected + 1, "started_at": r.StartedAt, "finished_at": r.FinishedAt, "updated_at": now})
 	if q.Error != nil {
 		return Run{}, q.Error

@@ -85,11 +85,19 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Workflow, erro
 	if err := s.record(ctx, audit.Event{ID: auditID(req.Execution.OperationID, "create", id), Time: now, Execution: req.Execution, Action: authz.Edit, Resource: ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: w.Revision}); err != nil {
 		return Workflow{}, err
 	}
-	if err := s.store.Create(ctx, w); err != nil {
-		return Workflow{}, platformerr.From(err, req.Execution.OperationID)
-	}
-	if err := s.store.CreateVersion(ctx, v); err != nil {
-		return Workflow{}, platformerr.From(err, req.Execution.OperationID)
+	if atomic, ok := s.store.(interface {
+		CreateWithVersion(context.Context, Workflow, Version) error
+	}); ok {
+		if err := atomic.CreateWithVersion(ctx, w, v); err != nil {
+			return Workflow{}, platformerr.From(err, req.Execution.OperationID)
+		}
+	} else {
+		if err := s.store.Create(ctx, w); err != nil {
+			return Workflow{}, platformerr.From(err, req.Execution.OperationID)
+		}
+		if err := s.store.CreateVersion(ctx, v); err != nil {
+			return Workflow{}, platformerr.From(err, req.Execution.OperationID)
+		}
 	}
 	_ = s.record(ctx, audit.Event{ID: auditID(req.Execution.OperationID, "create-succeeded", id), Time: s.now(), Execution: req.Execution, Action: authz.Edit, Resource: ref, Outcome: audit.Succeeded, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: w.Revision})
 	return w, nil
@@ -141,13 +149,22 @@ func (s *Service) SaveVersion(ctx context.Context, e authz.Execution, ref resour
 	if err != nil {
 		return Version{}, platformerr.New(platformerr.InvalidArgument, e.OperationID, err)
 	}
+	now := s.now().UTC()
+	v := Version{Workflow: ref, State: VersionDraft, Definition: normalized, Digest: digest, CreatedAt: now}
+	if atomic, ok := s.store.(interface {
+		SaveVersionAtomic(context.Context, Workflow, Version) (Version, error)
+	}); ok {
+		v, err = atomic.SaveVersionAtomic(ctx, w, v)
+		if err != nil {
+			return Version{}, platformerr.From(err, e.OperationID)
+		}
+		return v, nil
+	}
 	versions, err := s.store.ListVersions(ctx, ref)
 	if err != nil {
 		return Version{}, platformerr.From(err, e.OperationID)
 	}
-	n := uint64(len(versions) + 1)
-	now := s.now().UTC()
-	v := Version{Workflow: ref, Number: n, State: VersionDraft, Definition: normalized, Digest: digest, CreatedAt: now}
+	v.Number = uint64(len(versions) + 1)
 	if err := s.store.CreateVersion(ctx, v); err != nil {
 		return Version{}, platformerr.From(err, e.OperationID)
 	}
@@ -288,6 +305,7 @@ func (s *Service) TransitionRun(ctx context.Context, e authz.Execution, ref reso
 	r.State = to
 	r.ErrorCode = code
 	r.ErrorMessage = message
+	r.UpdatedAt = now
 	if to == RunRunning {
 		r.StartedAt = &now
 	}
