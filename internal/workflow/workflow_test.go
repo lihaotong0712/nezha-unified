@@ -27,7 +27,7 @@ func testExecution() authz.Execution {
 }
 func newStore(t *testing.T) *GORMStore {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s-%d?mode=memory&cache=shared", t.Name(), time.Now().UnixNano())), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,6 +37,17 @@ func newStore(t *testing.T) *GORMStore {
 	}
 	return s
 }
+func installVersionInsertFailure(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	name := fmt.Sprintf("fail_workflow_version_insert_%d", time.Now().UnixNano())
+	sql := fmt.Sprintf("CREATE TRIGGER %s BEFORE INSERT ON platform_workflow_versions BEGIN SELECT RAISE(ABORT, 'version insert failed'); END", name)
+	if err := db.Exec(sql).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Exec("DROP TRIGGER " + name).Error })
+	return name
+}
+
 func TestValidateDefinitionCanonicalDigest(t *testing.T) {
 	norm, digest, err := ValidateDefinition([]byte(`{"nodes":[{"type":"issue"}],"enabled":true}`))
 	if err != nil || digest == "" {
@@ -52,9 +63,7 @@ func TestValidateDefinitionCanonicalDigest(t *testing.T) {
 
 func TestCreateRollsBackWorkflowWhenInitialVersionFails(t *testing.T) {
 	s := NewService(newStore(t), allowAuthorizer{}, nil)
-	if err := s.store.(*GORMStore).db.Exec(`CREATE TRIGGER fail_workflow_version_insert BEFORE INSERT ON platform_workflow_versions BEGIN SELECT RAISE(ABORT, 'version insert failed'); END`).Error; err != nil {
-		t.Fatal(err)
-	}
+	installVersionInsertFailure(t, s.store.(*GORMStore).db)
 	_, err := s.Create(context.Background(), CreateRequest{Execution: testExecution(), OwnerID: 7, Name: "rollback", Definition: json.RawMessage(`{"nodes":[]}`)})
 	if err == nil {
 		t.Fatal("create succeeded despite version insert failure")
@@ -81,9 +90,7 @@ func TestSaveVersionAtomicRollsBackRevisionAndRejectsStaleWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := s.store.(*GORMStore)
-	if err := store.db.Exec(`CREATE TRIGGER fail_workflow_version_insert BEFORE INSERT ON platform_workflow_versions BEGIN SELECT RAISE(ABORT, 'version insert failed'); END`).Error; err != nil {
-		t.Fatal(err)
-	}
+	triggerName := installVersionInsertFailure(t, store.db)
 	_, err = s.SaveVersion(ctx, e, w.Ref, json.RawMessage(`{"nodes":[{"type":"issue"}]}`))
 	if err == nil {
 		t.Fatal("save succeeded despite version insert failure")
@@ -102,7 +109,7 @@ func TestSaveVersionAtomicRollsBackRevisionAndRejectsStaleWriter(t *testing.T) {
 	if len(versions) != 1 {
 		t.Fatalf("version rows after rollback = %d", len(versions))
 	}
-	if err := store.db.Exec(`DROP TRIGGER fail_workflow_version_insert`).Error; err != nil {
+	if err := store.db.Exec("DROP TRIGGER " + triggerName).Error; err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.SaveVersionAtomic(ctx, current, Version{Workflow: w.Ref, State: VersionDraft, Definition: json.RawMessage(`{"nodes":[{"type":"issue"}]}`), Digest: mustDigest(t, json.RawMessage(`{"nodes":[{"type":"issue"}]}`)), CreatedAt: time.Now().UTC()})
@@ -284,5 +291,26 @@ func TestRunKeepsImmutableDefinitionAcrossVersionPublish(t *testing.T) {
 	}
 	if stored.Version != current.CurrentVersion || string(stored.Definition) != string(before) || stored.Digest != run.Digest {
 		t.Fatalf("run snapshot changed: got version=%d definition=%s digest=%s", stored.Version, stored.Definition, stored.Digest)
+	}
+}
+
+func TestVersionNumberIsUniquePerWorkflow(t *testing.T) {
+	store := newStore(t)
+	definition := json.RawMessage(`{"nodes":[]}`)
+	_, digest, err := ValidateDefinition(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := resource.Ref{Kind: resource.Workflow, ID: "workflow-unique"}
+	w := Workflow{Ref: ref, OwnerID: 7, Name: "unique", State: StateDraft, Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := store.Create(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	v := Version{Workflow: ref, Number: 1, State: VersionDraft, Definition: definition, Digest: digest, CreatedAt: time.Now().UTC()}
+	if err := store.CreateVersion(context.Background(), v); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateVersion(context.Background(), v); err == nil {
+		t.Fatal("duplicate workflow version number accepted")
 	}
 }
