@@ -365,6 +365,23 @@ func TestNewServicesFailsWhenStableKeyMissingAfterEncryptedDataExists(t *testing
 	}
 }
 
+func TestNewServicesRejectsBroadStableKeyPermissions(t *testing.T) {
+	db := newPlatformTestDB(t)
+	keyPath := t.TempDir() + "/platform.key"
+	if err := db.Create(&model.User{Common: model.Common{ID: 7}, Username: "key-permission", Role: model.RoleAdmin}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewServices(db, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewServices(db, keyPath); err == nil {
+		t.Fatal("stable key with broad permissions must fail closed")
+	}
+}
+
 func errorAs(err error, target any) bool {
 	if err == nil {
 		return false
