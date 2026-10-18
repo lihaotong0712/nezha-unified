@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nezhahq/nezha/internal/resource"
@@ -54,6 +55,49 @@ func (certificateRow) TableName() string { return "platform_certificates" }
 type GORMStore struct {
 	db        *gorm.DB
 	materials ProtectedMaterialStore
+}
+
+// certificateMutationLocks serializes metadata/material mutations for the
+// same certificate within a process. The material store is deliberately kept
+// outside the metadata transaction, so without this coordination two
+// concurrent deletes could restore material after the other delete committed
+// the metadata removal and leave an orphaned secret.
+var certificateMutationLocks = newKeyedMutex()
+
+type keyedMutex struct {
+	mu      sync.Mutex
+	entries map[string]*keyedMutexEntry
+}
+
+type keyedMutexEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func newKeyedMutex() *keyedMutex {
+	return &keyedMutex{entries: make(map[string]*keyedMutexEntry)}
+}
+
+func (m *keyedMutex) lock(key string) func() {
+	m.mu.Lock()
+	entry := m.entries[key]
+	if entry == nil {
+		entry = new(keyedMutexEntry)
+		m.entries[key] = entry
+	}
+	entry.refs++
+	m.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		m.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(m.entries, key)
+		}
+		m.mu.Unlock()
+	}
 }
 
 func NewGORMStore(db *gorm.DB, materials ProtectedMaterialStore) (*GORMStore, error) {
@@ -109,6 +153,8 @@ func (s *GORMStore) Create(ctx context.Context, record Record, certificatePEM, p
 	if err != nil || len(certificatePEM) == 0 || len(privateKeyPEM) == 0 {
 		return ErrInvalidCertificate
 	}
+	unlock := certificateMutationLocks.lock(record.Ref.ID)
+	defer unlock()
 	if err := s.materials.Put(ctx, record.Ref, certificatePEM, privateKeyPEM); err != nil {
 		return err
 	}
@@ -159,6 +205,8 @@ func (s *GORMStore) Delete(ctx context.Context, ref resource.Ref) error {
 	if s == nil || s.db == nil || ref.Kind != resource.Certificate || ref.Validate() != nil {
 		return ErrNotFound
 	}
+	unlock := certificateMutationLocks.lock(ref.ID)
+	defer unlock()
 	var current certificateRow
 	if err := s.db.WithContext(ctx).First(&current, "ref_id = ?", ref.ID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -201,8 +249,12 @@ func (s *GORMStore) restoreMaterialIfMetadataPresent(ctx context.Context, ref re
 	if lookupErr != nil {
 		// A missing row means the metadata delete committed. For an unknown
 		// lookup failure, leave the material deleted rather than risk creating
-		// an orphan secret while the metadata state is uncertain.
-		return nil
+		// an orphan secret while the metadata state is uncertain, but surface
+		// that uncertainty to the caller for retry or operational handling.
+		if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return lookupErr
 	}
 	return restoreCertificateMaterial(ctx, s.materials, ref, certificatePEM, privateKeyPEM)
 }
