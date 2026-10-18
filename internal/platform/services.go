@@ -167,6 +167,10 @@ func NewServices(db *gorm.DB, keyPath string) (*Services, error) {
 	if err := credentials.Migrate(context.Background()); err != nil {
 		return nil, err
 	}
+	// The platform resource registry is authoritative for cross-module
+	// ownership and lifecycle state. Credential metadata remains a local
+	// projection, so secret resolution must consult the registry on every use.
+	credentials.SetResourceLookup(resources)
 	credentials.SetRecorder(recorder)
 
 	materials, err := certificate.NewAESGCMMaterialStore(db, "dashboard-v1", key)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nezhahq/nezha/internal/authz"
 	"github.com/nezhahq/nezha/internal/certificate"
+	"github.com/nezhahq/nezha/internal/credential"
 	"github.com/nezhahq/nezha/internal/platformerr"
 	"github.com/nezhahq/nezha/internal/resource"
 	"github.com/nezhahq/nezha/model"
@@ -130,6 +131,71 @@ func TestNewServicesMigrationsAreRepeatableAndAdminSessionIsTrusted(t *testing.T
 	})
 	if err != nil || !decision.Allowed || decision.PolicyVersion == "" {
 		t.Fatalf("admin decision = %+v, %v", decision, err)
+	}
+}
+
+func TestNewServicesCredentialResolutionUsesResourceRegistryLifecycle(t *testing.T) {
+	db := newPlatformTestDB(t)
+	keyPath := t.TempDir() + "/platform.key"
+	if err := db.Create(&model.User{Common: model.Common{ID: 7}, Username: "credential-admin", Role: model.RoleAdmin}).Error; err != nil {
+		t.Fatal(err)
+	}
+	services, err := NewServices(db, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	binding := credential.Binding{
+		Purpose:  credential.DNSManage,
+		Consumer: resource.Ref{Kind: resource.Workflow, ID: "workflow-credential-registry"},
+		Target:   resource.Ref{Kind: resource.DNSZone, ID: "zone-credential-registry"},
+	}
+	metadata, err := services.Credentials.Create(ctx, credential.CreateRequest{
+		ID:       "credential-registry",
+		OwnerID:  7,
+		Name:     "registry credential",
+		Type:     credential.Type("cloudflare.api_token"),
+		Bindings: []credential.Binding{binding},
+		Secret:   credential.NewSecret([]byte("registry-secret")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := services.Resources.Create(ctx, metadata.Resource); err != nil {
+		t.Fatal(err)
+	}
+	request := credential.UseRequest{
+		Execution:    platformSession(7, "credential-registry-use"),
+		Credential:   credential.Ref{ID: metadata.Resource.Ref.ID},
+		ExpectedType: metadata.Type,
+		Binding:      binding,
+		Action:       authz.Use,
+	}
+	var resolved string
+	if err := services.Credentials.WithSecret(ctx, request, func(_ context.Context, value credential.Resolved) error {
+		resolved = string(value.Secret.Bytes())
+		return nil
+	}); err != nil {
+		t.Fatalf("active registry credential use = %v", err)
+	}
+	if resolved != "registry-secret" {
+		t.Fatalf("resolved credential = %q", resolved)
+	}
+
+	disabled := metadata.Resource
+	disabled.State = resource.Disabled
+	updated, err := services.Resources.Update(ctx, disabled, metadata.Resource.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := services.Credentials.WithSecret(ctx, request, func(context.Context, credential.Resolved) error { return nil }); !errors.Is(err, credential.ErrCredentialDisabled) {
+		t.Fatalf("disabled registry credential = %v", err)
+	}
+	if err := services.Resources.Delete(ctx, updated.Ref, updated.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := services.Credentials.WithSecret(ctx, request, func(context.Context, credential.Resolved) error { return nil }); !errors.Is(err, credential.ErrCredentialDisabled) {
+		t.Fatalf("deleted registry credential = %v", err)
 	}
 }
 
