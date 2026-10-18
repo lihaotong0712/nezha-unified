@@ -78,6 +78,12 @@ func canonicalRoutes() []scopedRoute {
 		{"GET", "/api/v1/certificates/workflow-runs/{id}", "nezha:workflow:read"},
 		{"POST", "/api/v1/certificates/workflow-runs/{id}/transition", "nezha:workflow:exec"},
 		{"DELETE", "/api/v1/certificates/workflows/{id}", "nezha:workflow:delete"},
+		{"GET", "/api/v1/dns/zones", "nezha:dns:read"},
+		{"GET", "/api/v1/dns/zones/{id}/records", "nezha:dns:read"},
+		{"GET", "/api/v1/dns/zones/{id}/records/{recordID}", "nezha:dns:read"},
+		{"POST", "/api/v1/dns/zones/{id}/records", "nezha:dns:write"},
+		{"PATCH", "/api/v1/dns/zones/{id}/records/{recordID}", "nezha:dns:write"},
+		{"DELETE", "/api/v1/dns/zones/{id}/records/{recordID}", "nezha:dns:delete"},
 
 		{"GET", "/api/v1/service/list", "nezha:service:read"},
 		{"POST", "/api/v1/service", "nezha:service:write"},

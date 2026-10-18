@@ -206,6 +206,14 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.GET("/certificates/:id/download", restScopeMiddleware(model.ScopeCertificateDownload), downloadCertificate)
 	auth.DELETE("/certificates/:id", restScopeMiddleware(model.ScopeCertificateDelete), commonHandler(deleteCertificate))
 
+	// DNS zone and record operations are backed by the unified DNS service.
+	auth.GET("/dns/zones", restScopeMiddleware(model.ScopeDNSRead), commonHandler(listDNSZones))
+	auth.GET("/dns/zones/:id/records", restScopeMiddleware(model.ScopeDNSRead), commonHandler(listDNSRecords))
+	auth.GET("/dns/zones/:id/records/:recordID", restScopeMiddleware(model.ScopeDNSRead), commonHandler(getDNSRecord))
+	auth.POST("/dns/zones/:id/records", restScopeMiddleware(model.ScopeDNSWrite), commonHandler(createDNSRecord))
+	auth.PATCH("/dns/zones/:id/records/:recordID", restScopeMiddleware(model.ScopeDNSWrite), commonHandler(updateDNSRecord))
+	auth.DELETE("/dns/zones/:id/records/:recordID", restScopeMiddleware(model.ScopeDNSDelete), commonHandler(deleteDNSRecord))
+
 	// 管理员资源 — 仅 nezha:* / nezha:admin:* 持有者可调（adminHandler 进一步校验 user.Role）。
 	auth.GET("/user", restScopeMiddleware(model.ScopeAdminAll), adminHandler(listUser))
 	auth.POST("/user", restScopeMiddleware(model.ScopeAdminAll), adminHandler(createUser))

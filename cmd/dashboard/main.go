@@ -153,6 +153,7 @@ func main() {
 	}
 	controller.SetCertificateService(platformServices.Certificates)
 	controller.SetWorkflowService(platformServices.Workflows)
+	controller.SetDNSService(platformServices.DNS)
 
 	l, err := openDashboardListener("tcp", dashboardListenerAddress(singleton.Conf.ListenHost, singleton.Conf.ListenPort), dashboardHTTPListener)
 	if err != nil {

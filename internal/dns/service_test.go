@@ -85,7 +85,9 @@ func TestServiceCreateRecordAuthorizesFactsAndAudits(t *testing.T) {
 	authorizer := &serviceAuthorizer{allowed: true}
 	recorder := &serviceRecorder{}
 	provider := testProvider()
-	service := NewService(store, authorizer, recorder, func(context.Context, ZoneBinding) (Provider, error) { return provider, nil })
+	service := NewService(store, authorizer, recorder, func(context.Context, authz.Execution, authz.Action, ZoneBinding) (Provider, error) {
+		return provider, nil
+	})
 	got, err := service.CreateRecord(context.Background(), testExecution(), binding.Ref, RecordData{Name: "www.example.com.", Type: "A", Value: "192.0.2.1", TTL: TTL{Mode: TTLExplicit, Seconds: 300}})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +95,7 @@ func TestServiceCreateRecordAuthorizesFactsAndAudits(t *testing.T) {
 	if got.ID != "record-1" || provider.created != 1 {
 		t.Fatalf("result=%+v created=%d", got, provider.created)
 	}
-	if len(authorizer.requests) < 2 || len(authorizer.requests[0].DNS) != 1 || authorizer.requests[0].DNS[0].Name != "www.example.com." {
+	if len(authorizer.requests) != 1 || len(authorizer.requests[0].DNS) != 1 || authorizer.requests[0].DNS[0].Name != "www.example.com." {
 		t.Fatalf("authorization facts=%+v", authorizer.requests)
 	}
 	if len(recorder.events) != 2 || recorder.events[0].Outcome != audit.Requested || recorder.events[1].Outcome != audit.Succeeded {
@@ -109,7 +111,10 @@ func TestServiceDeniedDoesNotResolveProviderOrMutate(t *testing.T) {
 	}
 	authorizer := &serviceAuthorizer{}
 	called := false
-	service := NewService(store, authorizer, nil, func(context.Context, ZoneBinding) (Provider, error) { called = true; return testProvider(), nil })
+	service := NewService(store, authorizer, nil, func(context.Context, authz.Execution, authz.Action, ZoneBinding) (Provider, error) {
+		called = true
+		return testProvider(), nil
+	})
 	_, err := service.CreateRecord(context.Background(), testExecution(), binding.Ref, RecordData{Name: "www.example.com.", Type: "A", Value: "192.0.2.1", TTL: TTL{Mode: TTLExplicit, Seconds: 300}})
 	if err == nil {
 		t.Fatal("expected authorization denial")

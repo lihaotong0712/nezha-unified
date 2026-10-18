@@ -23,15 +23,15 @@ import (
 // ZoneBinding is the local, authorized mapping to one provider zone. Remote
 // IDs remain opaque and are never accepted as a substitute for Ref.
 type ZoneBinding struct {
-	Ref        resource.Ref
-	OwnerID    uint64
-	Provider   string
-	Remote     Zone
-	Credential resource.Ref
-	Revision   uint64
-	State      resource.State
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	Ref        resource.Ref   `json:"ref"`
+	OwnerID    uint64         `json:"owner_id"`
+	Provider   string         `json:"provider"`
+	Remote     Zone           `json:"remote"`
+	Credential resource.Ref   `json:"credential,omitempty"`
+	Revision   uint64         `json:"revision"`
+	State      resource.State `json:"state"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 func (z ZoneBinding) Validate() error {
@@ -120,7 +120,9 @@ func (s *MemoryStore) List(ctx context.Context, ownerID uint64) ([]ZoneBinding, 
 // ProviderFactory resolves a validated credential reference into a provider.
 // It is called for every operation, allowing credential revocation to take
 // effect without retaining provider clients or secrets in the service.
-type ProviderFactory func(context.Context, ZoneBinding) (Provider, error)
+// The execution and action are passed through so credential use can preserve
+// the caller's PAT/session restrictions at the provider boundary.
+type ProviderFactory func(context.Context, authz.Execution, authz.Action, ZoneBinding) (Provider, error)
 
 type Authorizer interface {
 	Authorize(context.Context, authz.Request) (authz.Decision, error)
@@ -159,6 +161,11 @@ func (s *Service) ListZones(ctx context.Context, execution authz.Execution, owne
 	for _, item := range items {
 		if _, err := s.check(ctx, execution, authz.View, item, nil); err == nil {
 			out = append(out, item)
+		} else {
+			var policyErr *platformerr.Error
+			if !errors.As(err, &policyErr) || policyErr.Code != platformerr.Forbidden {
+				return nil, err
+			}
 		}
 	}
 	return out, nil
@@ -176,7 +183,7 @@ func (s *Service) ListRecords(ctx context.Context, execution authz.Execution, re
 	if _, err := s.check(ctx, execution, authz.View, binding, facts); err != nil {
 		return Page[Record]{}, err
 	}
-	provider, err := s.resolveProvider(ctx, execution, binding)
+	provider, err := s.resolveProvider(ctx, execution, authz.View, binding)
 	if err != nil {
 		return Page[Record]{}, err
 	}
@@ -191,7 +198,7 @@ func (s *Service) GetRecord(ctx context.Context, execution authz.Execution, ref 
 	if _, err := s.check(ctx, execution, authz.View, binding, nil); err != nil {
 		return Record{}, err
 	}
-	provider, err := s.resolveProvider(ctx, execution, binding)
+	provider, err := s.resolveProvider(ctx, execution, authz.View, binding)
 	if err != nil {
 		return Record{}, err
 	}
@@ -210,17 +217,17 @@ func (s *Service) CreateRecord(ctx context.Context, execution authz.Execution, r
 	if err != nil {
 		return Record{}, err
 	}
-	if _, err := s.check(ctx, execution, authz.Edit, binding, dnsFacts(binding, data.Name, data.Type)); err != nil {
+	decision, err := s.check(ctx, execution, authz.Edit, binding, dnsFacts(binding, data.Name, data.Type))
+	if err != nil {
 		return Record{}, err
 	}
-	provider, err := s.resolveProvider(ctx, execution, binding)
+	provider, err := s.resolveProvider(ctx, execution, authz.Edit, binding)
 	if err != nil {
 		return Record{}, err
 	}
 	if err := s.requireCapability(ctx, provider, binding.Remote, FeatureCreateRecord); err != nil {
 		return Record{}, platformerr.From(err, execution.OperationID)
 	}
-	decision, _ := s.check(ctx, execution, authz.Edit, binding, dnsFacts(binding, data.Name, data.Type))
 	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "create-requested", binding.Ref.ID), Time: s.now(), Execution: execution, Action: authz.Edit, Resource: binding.Ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision}); err != nil {
 		return Record{}, err
 	}
@@ -238,17 +245,17 @@ func (s *Service) UpdateRecord(ctx context.Context, execution authz.Execution, r
 	if err != nil {
 		return Record{}, err
 	}
-	if _, err := s.check(ctx, execution, authz.Edit, binding, dnsFacts(binding, before.Name, before.Type, after.Name, after.Type)); err != nil {
+	decision, err := s.check(ctx, execution, authz.Edit, binding, dnsFacts(binding, before.Name, before.Type, after.Name, after.Type))
+	if err != nil {
 		return Record{}, err
 	}
-	provider, err := s.resolveProvider(ctx, execution, binding)
+	provider, err := s.resolveProvider(ctx, execution, authz.Edit, binding)
 	if err != nil {
 		return Record{}, err
 	}
 	if err := s.requireCapability(ctx, provider, binding.Remote, FeatureUpdateRecord); err != nil {
 		return Record{}, platformerr.From(err, execution.OperationID)
 	}
-	decision, _ := s.check(ctx, execution, authz.Edit, binding, dnsFacts(binding, before.Name, before.Type, after.Name, after.Type))
 	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "update-requested", string(before.ID)), Time: s.now(), Execution: execution, Action: authz.Edit, Resource: binding.Ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision}); err != nil {
 		return Record{}, err
 	}
@@ -270,17 +277,17 @@ func (s *Service) DeleteRecord(ctx context.Context, execution authz.Execution, r
 	if err != nil {
 		return err
 	}
-	if _, err := s.check(ctx, execution, authz.Delete, binding, dnsFacts(binding, before.Name, before.Type)); err != nil {
+	decision, err := s.check(ctx, execution, authz.Delete, binding, dnsFacts(binding, before.Name, before.Type))
+	if err != nil {
 		return err
 	}
-	provider, err := s.resolveProvider(ctx, execution, binding)
+	provider, err := s.resolveProvider(ctx, execution, authz.Delete, binding)
 	if err != nil {
 		return err
 	}
 	if err := s.requireCapability(ctx, provider, binding.Remote, FeatureDeleteRecord); err != nil {
 		return platformerr.From(err, execution.OperationID)
 	}
-	decision, _ := s.check(ctx, execution, authz.Delete, binding, dnsFacts(binding, before.Name, before.Type))
 	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "delete-requested", string(before.ID)), Time: s.now(), Execution: execution, Action: authz.Delete, Resource: binding.Ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: binding.Revision}); err != nil {
 		return err
 	}
@@ -309,11 +316,11 @@ func (s *Service) loadBinding(ctx context.Context, execution authz.Execution, re
 	return binding, nil
 }
 
-func (s *Service) resolveProvider(ctx context.Context, execution authz.Execution, binding ZoneBinding) (Provider, error) {
+func (s *Service) resolveProvider(ctx context.Context, execution authz.Execution, action authz.Action, binding ZoneBinding) (Provider, error) {
 	if s == nil || s.factory == nil {
 		return nil, platformerr.New(platformerr.Unavailable, execution.OperationID, nil)
 	}
-	provider, err := s.factory(ctx, binding)
+	provider, err := s.factory(ctx, execution, action, binding)
 	if err != nil {
 		return nil, platformerr.From(err, execution.OperationID)
 	}

@@ -452,7 +452,11 @@ func patAllowsScope(scopes string, action Action, kind resource.Kind) bool {
 	if verb == "" {
 		return false
 	}
-	prefix := "nezha:" + string(kind) + ":"
+	resourceName := string(kind)
+	if kind == resource.DNSZone || kind == resource.DNSRecord {
+		resourceName = "dns"
+	}
+	prefix := "nezha:" + resourceName + ":"
 	for _, raw := range strings.Split(scopes, ",") {
 		scope := strings.TrimSpace(raw)
 		if scope == "nezha:*" || scope == "nezha:admin:*" || scope == prefix+"*" || scope == prefix+verb || scope == prefix+string(action) {

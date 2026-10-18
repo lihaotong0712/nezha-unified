@@ -15,10 +15,10 @@ type ZoneID string
 type RecordID string
 
 type Zone struct {
-	ID         ZoneID
-	Name       string // Lowercase ASCII FQDN, including the trailing dot.
-	AccessMode string // Provider value, e.g. EdgeOne "full"; empty if unknown.
-	Status     string // Provider value; not an authorization decision.
+	ID         ZoneID `json:"id"`
+	Name       string `json:"name"`                  // Lowercase ASCII FQDN, including the trailing dot.
+	AccessMode string `json:"access_mode,omitempty"` // Provider value, e.g. EdgeOne "full"; empty if unknown.
+	Status     string `json:"status,omitempty"`      // Provider value; not an authorization decision.
 }
 
 type TTLMode string
@@ -29,27 +29,27 @@ const (
 )
 
 type TTL struct {
-	Mode    TTLMode
-	Seconds uint32 // Positive for explicit; zero for automatic.
+	Mode    TTLMode `json:"mode"`
+	Seconds uint32  `json:"seconds"` // Positive for explicit; zero for automatic.
 }
 
 // RecordData is a complete desired record, not a PATCH document. Updates must
 // preserve fields copied from the current record unless explicitly changed.
 type RecordData struct {
-	Name       string // Lowercase ASCII FQDN with trailing dot; apex is zone.Name.
-	Type       string // Uppercase, e.g. A, TXT, MX, SRV.
-	Value      string // Complete RFC presentation RDATA, including MX/SRV priority.
-	TTL        TTL
-	Line       string                     // Opaque provider line ID; empty selects provider default.
-	Weight     *uint16                    // nil means unset; zero is a real provider-specific value.
-	Proxied    *bool                      // nil means inapplicable; false explicitly selects DNS only.
-	Disabled   *bool                      // nil means inapplicable; true requires native support.
-	Comment    *string                    // nil means absent; pointer to empty string clears a comment.
-	Extensions map[string]json.RawMessage // Validated provider fields, never secrets.
+	Name       string                     `json:"name"`  // Lowercase FQDN; apex is zone.Name.
+	Type       string                     `json:"type"`  // Uppercase, e.g. A, TXT, MX, SRV.
+	Value      string                     `json:"value"` // Complete RFC presentation RDATA, including MX/SRV priority.
+	TTL        TTL                        `json:"ttl"`
+	Line       string                     `json:"line,omitempty"`       // Opaque provider line ID; empty selects provider default.
+	Weight     *uint16                    `json:"weight,omitempty"`     // nil means unset; zero is a real provider-specific value.
+	Proxied    *bool                      `json:"proxied,omitempty"`    // nil means inapplicable; false explicitly selects DNS only.
+	Disabled   *bool                      `json:"disabled,omitempty"`   // nil means inapplicable; true requires native support.
+	Comment    *string                    `json:"comment,omitempty"`    // nil means absent; pointer to empty string clears a comment.
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"` // Validated provider fields, never secrets.
 }
 
 type Record struct {
-	ID RecordID
+	ID RecordID `json:"id"`
 	RecordData
 }
 
@@ -62,8 +62,8 @@ type PageRequest struct {
 }
 
 type Page[T any] struct {
-	Items      []T
-	NextCursor string // Empty only when iteration has finished.
+	Items      []T    `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"` // Empty only when iteration has finished.
 }
 
 // RecordFilter fields are exact matches combined with AND. Empty fields do not

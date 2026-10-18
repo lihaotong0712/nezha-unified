@@ -92,6 +92,10 @@ const (
 	ScopeWorkflowDelete = "nezha:workflow:delete"
 	ScopeWorkflowExec   = "nezha:workflow:exec"
 
+	ScopeDNSRead   = "nezha:dns:read"
+	ScopeDNSWrite  = "nezha:dns:write"
+	ScopeDNSDelete = "nezha:dns:delete"
+
 	ScopeAdminAll = "nezha:admin:*"
 )
 
@@ -109,6 +113,7 @@ var AllScopes = []string{
 	ScopeCertificateRead, ScopeCertificateWrite, ScopeCertificateDelete,
 	ScopeCertificateDownload, ScopeCertificateReveal,
 	ScopeWorkflowRead, ScopeWorkflowWrite, ScopeWorkflowDelete, ScopeWorkflowExec,
+	ScopeDNSRead, ScopeDNSWrite, ScopeDNSDelete,
 
 	"nezha:inventory:*",
 	"nezha:server:*",
@@ -121,6 +126,8 @@ var AllScopes = []string{
 	"nezha:notification-group:*",
 	"nezha:transfer:*",
 	"nezha:certificate:*",
+	"nezha:workflow:*",
+	"nezha:dns:*",
 }
 
 var AdminOnlyScopes = []string{ScopeNezhaAll, ScopeAdminAll}

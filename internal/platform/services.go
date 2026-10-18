@@ -19,7 +19,10 @@ import (
 	"github.com/nezhahq/nezha/internal/authz"
 	"github.com/nezhahq/nezha/internal/certificate"
 	"github.com/nezhahq/nezha/internal/credential"
+	"github.com/nezhahq/nezha/internal/dns"
+	"github.com/nezhahq/nezha/internal/dns/cloudflare"
 	"github.com/nezhahq/nezha/internal/resource"
+	"github.com/nezhahq/nezha/internal/workflow"
 	"github.com/nezhahq/nezha/model"
 	"gorm.io/gorm"
 )
@@ -35,6 +38,10 @@ type Services struct {
 	Credentials     *credential.Store
 	Certificates    *certificate.Service
 	CertificateData *certificate.GORMStore
+	DNS             *dns.Service
+	DNSBindings     *dns.GORMStore
+	Workflows       *workflow.Service
+	WorkflowData    *workflow.GORMStore
 }
 
 // DashboardAuthorizer adds the trusted browser-session policy that the
@@ -169,11 +176,58 @@ func NewServices(db *gorm.DB, keyPath string) (*Services, error) {
 		return nil, err
 	}
 	certificates := certificate.NewService(certificateData, authorizer, recorder)
+	dnsBindings, err := dns.NewGORMStore(db)
+	if err != nil {
+		return nil, err
+	}
+	dnsService := dns.NewService(dnsBindings, authorizer, recorder, func(ctx context.Context, execution authz.Execution, action authz.Action, binding dns.ZoneBinding) (dns.Provider, error) {
+		if binding.Provider != "cloudflare" {
+			return nil, fmt.Errorf("unsupported DNS provider %q", binding.Provider)
+		}
+		metadata, err := credentials.ListMetadata(ctx, binding.OwnerID)
+		if err != nil {
+			return nil, err
+		}
+		var expected credential.Type
+		for _, item := range metadata {
+			if item.Resource.Ref == binding.Credential {
+				expected = item.Type
+				break
+			}
+		}
+		if expected == "" {
+			return nil, credential.ErrCredentialNotFound
+		}
+		var provider dns.Provider
+		request := credential.UseRequest{
+			Execution:    execution,
+			Credential:   credential.Ref{ID: binding.Credential.ID},
+			ExpectedType: expected,
+			Binding:      credential.Binding{Purpose: credential.DNSManage, Consumer: binding.Ref, Target: binding.Ref},
+			Action:       action,
+		}
+		if err := credentials.WithSecret(ctx, request, func(_ context.Context, resolved credential.Resolved) error {
+			if expected != credential.Type("cloudflare.api_token") {
+				return fmt.Errorf("unsupported Cloudflare credential type %q", expected)
+			}
+			provider = cloudflare.New(string(resolved.Secret.Bytes()))
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return provider, nil
+	})
+	workflowData, err := workflow.NewGORMStore(db)
+	if err != nil {
+		return nil, err
+	}
+	workflows := workflow.NewService(workflowData, authorizer, recorder)
 
 	return &Services{
 		Resources: resources, Authorizer: authorizer, Audit: recorder,
 		Credentials: credentials, Certificates: certificates,
-		CertificateData: certificateData,
+		CertificateData: certificateData, DNS: dnsService, DNSBindings: dnsBindings,
+		Workflows: workflows, WorkflowData: workflowData,
 	}, nil
 }
 
