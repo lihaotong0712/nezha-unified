@@ -1,8 +1,10 @@
 # 集中 DNS Go 接口草案
 
-本文定义 DNS 厂商适配器与应用服务的职责边界，供 DNS、凭据、授权、DDNS 和证书工作协作使用。类型声明位于 [`internal/dns/provider.go`](../internal/dns/provider.go)，只依赖 Go 标准库，可独立编译。当前状态为草案，尚未接入 Dashboard、数据库、API、调度器或现有 DDNS worker。
+本文定义 DNS 厂商适配器与应用服务的职责边界，供 DNS、凭据、授权、DDNS 和证书工作协作使用。类型声明位于 [`internal/dns/provider.go`](../internal/dns/provider.go)，只依赖 Go 标准库，可独立编译。Provider contract 仍是扩展草案，但 Zone binding GORM store、DNS 应用服务、Dashboard API 和 `/dashboard/dns` 页面已经接入；当前运行时只装配 Cloudflare 适配器。
 
-厂商依据见 [能力矩阵](DNS_PROVIDER_MATRIX.md)，总体约束沿用 [集成方案第六节](DESIGN.md#六集中-dns-与-ddns)。本草案不确定跨模块资源 ID、凭据存储、授权对象或生命周期类型，避免与公共契约工作分别建立模型。
+厂商依据见 [能力矩阵](DNS_PROVIDER_MATRIX.md)，总体约束沿用 [集成方案第六节](DESIGN.md#六集中-dns-与-ddns)。跨模块资源 ID、凭据存储、授权对象和生命周期类型遵循 [公共契约](CONTRACTS.md)；本文件只保留厂商能力和适配器扩展边界。DNSPod、EdgeOne、现有 DDNS worker、DNS-01 challenge 和调度器尚未接入该运行时。
+
+当前已覆盖的 DNS 纵切面包括：`dns.GORMStore` 持久化本地 Zone binding；DNS 服务在 Zone/记录读取及记录增改删前执行资源授权、PAT scope、凭据用途和能力检查，并对写操作记录审计；Dashboard 提供 `GET /api/v1/dns/zones`、`GET /api/v1/dns/zones/:id/records`、`GET /api/v1/dns/zones/:id/records/:recordID`、`POST /api/v1/dns/zones/:id/records`、`PATCH /api/v1/dns/zones/:id/records/:recordID` 和 `DELETE /api/v1/dns/zones/:id/records/:recordID`。Cloudflare 适配器覆盖 Zone/记录读取和按记录 ID 的创建、更新、删除；真实厂商账号联调尚未完成。
 
 ## 边界与依赖方向
 
@@ -18,7 +20,7 @@
 | 层次 | 本草案确定的职责 | 仍由公共契约或后续实现确定的内容 |
 |---|---|---|
 | 厂商适配器 | 远程 ID、名称、RDATA、TTL、分页、能力、增改删、错误语义 | SDK/HTTP 实现、传输策略、厂商注册与配置表单 |
-| DNS 应用服务 | 授权后调用、同资源协调、批量逐项结果、审计和状态核验 | 本地账户/Zone 模型、资源 ID、事务、运行记录与队列 |
+| DNS 应用服务 | 授权后调用、同资源协调、逐项授权、审计和状态核验；当前已接入本地 Zone binding 和记录 CRUD | 多厂商账户模型、跨操作事务、持久运行队列与调度 |
 | 凭据与授权 | 执行前和重试前重新验证主体、用途、范围及凭据状态 | `credential_ref` 类型、加密存储、版本租约、主体与资源类型 |
 | Dashboard 生命周期 | Provider 调用接受 `context.Context` 并响应截止时间和取消 | 初始化顺序、调度启动/停止与后台任务注册 |
 
@@ -95,10 +97,10 @@ DNS-01 创建 TXT 时，应用服务保存运行/订单、账户、Zone、名称
 
 ## 后续接入与验证顺序
 
-1. 与公共契约工作确定资源引用、执行主体、凭据用途和生命周期接口，再实现应用服务与适配器工厂。
-2. 先实现 Cloudflare 的读取、记录 ID 写入和字段保留；用 HTTP mock 验证分页、自动 TTL、权限与不确定写入结果。
+1. 在现有公共契约、Zone binding 和凭据工厂上补充账户级配置与能力探测，避免让远程 Zone ID 取代本地资源引用。
+2. 完成 Cloudflare 真实测试账户联调，验证分页、自动 TTL、权限、错误脱敏和不确定写入结果；当前 HTTP mock 只覆盖适配器行为。
 3. 接入 DNSPod 线路、套餐 TTL 和备注；接入 EdgeOne NS 模式、当前批量修改 Action、零权重与优先级范围。
-4. 验证子域授权、旧名称与新名称检查、批量部分成功、同名多 TXT，以及 DDNS / DNS-01 的并发和清理。
-5. 真实测试账户联调后才声明对应能力可用；DNSSEC、其他厂商及异步批量按证据补充扩展。
+4. 将 DDNS、DNS-01 和调度任务接入同一应用服务，验证子域授权、旧名称与新名称检查、批量部分成功、同名多 TXT，以及并发和清理。
+5. 真实测试账户联调后才声明对应厂商能力可用；DNSSEC、其他厂商及异步批量按证据补充扩展。
 
-本次类型文件只有接口、结构和常量，没有模拟成功的适配器或运行时逻辑。编译与静态检查仅验证 Go 声明有效，不等于厂商行为、授权或兼容性已经通过测试。
+Provider contract 的编译和 mock 测试只验证 Go 类型、字段保留、错误分类及适配器行为，不等于真实厂商账号、授权、传播一致性或部署兼容性已经通过测试。

@@ -2,6 +2,16 @@
 
 本文以 `upstreams.lock.json` 锁定的 Certimate `v0.4.35`（`884b353c7e2a5331ca24ff61bc18dea291cd8d91`）为盘点基线。源码参考克隆位于被忽略的 `upstream/certimate/`，不参与项目构建。表中的目标位置遵循 [`DEVELOPMENT.md`](DEVELOPMENT.md) 和 [`DESIGN.md`](DESIGN.md)；实际迁移时应维持现有 Nezha 模块结构，不复制上游独立应用边界。
 
+## 当前实现状态（验收口径）
+
+- 证书基础资产已接入：支持证书材料的加密存储、元数据查询、下载/私钥揭示授权和审计；这部分不包含 ACME 签发、续签、部署或通知 provider。
+- 工作流已接入 `internal/workflow` 的最小持久化纵切面：工作流、版本和运行记录使用 GORM 存储，提供草稿/发布、启停、运行快照、状态转换和 Dashboard HTTP API。该能力是版本与运行历史基础，不是完整 Certimate workflow engine。
+- DNS 作为独立资源已接入 Cloudflare 纵切面：Zone binding GORM store、授权 DNS 服务、记录读取和记录 CRUD API，以及 `/dashboard/dns` 页面已接入统一数据库、授权器、凭据存储和审计记录器。DNSPod、EdgeOne、现有 DDNS worker、DNS-01 challenge 和调度器尚未接入。
+- 尚未完成 Certimate 全量迁移：没有迁移全部节点、ACME 签发、部署和通知 provider、运行节点输出/日志、持久调度、崩溃恢复、离线补发或旧 PocketBase 数据。
+- 尚未进行真实 Cloudflare、DNSPod 或 EdgeOne 账号联调；真实部署副作用也未验证。platform key 的备份、恢复和轮换演练尚未完成。
+
+以下章节中的节点、provider、页面和数据清单是上游迁移基线与目标验收范围，不能据此推断对应能力已经实现。
+
 ## 迁移原则
 
 - 保留 Certimate 证书业务的可观察行为、工作流图格式、节点语义、提供商能力、运行结果、证书与日志数据，以及上游许可证和版权声明。
@@ -18,8 +28,8 @@
 | 证书记录 `certificate` | `internal/domain/certificate.go`；`internal/repository/certificate.go` | `internal/certificate` 存储层 | SQLite/PocketBase 查询改为项目选定的内部存储。证书 PEM 和私钥属于敏感资产，需加密/访问审计；上传时校验证书与私钥匹配及 SAN。 |
 | ACME 账户 `acme_accounts` | `internal/domain/acme_account.go`；`internal/repository/acme_account.go` | `internal/certificate/acme` | 保留 CA、邮箱、账户 URL、目录 URL 与账户私钥/资源对象；私钥应作为受保护证书资产存储，不得经普通列表 API 返回。 |
 | 外部凭据 `access` | `internal/domain/access.go`；`internal/repository/access.go`；`internal/domain/provider.go` | `internal/credential` + 证书/提供商绑定 | 上游配置结构可用于类型和表单盘点；密钥迁入统一凭据记录，执行时按作用域解析。DNS 验证、CA、部署、通知的凭据用途必须分别授权。 |
-| 工作流定义 `workflow` | `internal/domain/workflow.go`；`internal/repository/workflow.go` | `internal/certificate/workflow` | 保留草稿/已发布图、启停、触发器、Cron、最近运行信息；图 JSON 与节点 ID 语义要版本化。保存、发布和启停替换 PocketBase hooks，采用事务提交后更新调度。 |
-| 工作流运行 `workflow_run` | `internal/domain/workflow_run.go`；`internal/repository/workflow_run.go` | `internal/certificate/run` | 保留运行时快照、触发方式、开始/结束时间、状态、错误和取消语义；增加调用者/服务身份、策略版本、凭据/目标版本和幂等键。 |
+| 工作流定义 `workflow` | `internal/domain/workflow.go`；`internal/repository/workflow.go` | `internal/workflow` | 当前已接入最小持久化、版本保存/发布、启停和 Dashboard API；完整图编辑器、触发器、Cron、调度更新和全部节点语义仍待迁移。 |
+| 工作流运行 `workflow_run` | `internal/domain/workflow_run.go`；`internal/repository/workflow_run.go` | `internal/workflow` | 当前已接入运行时定义快照、触发身份、状态、错误和状态转换；节点输出/日志、持久队列、恢复、重试和取消副作用仍待迁移。 |
 | 节点输出 `workflow_output`、节点日志 `workflow_logs` | `internal/domain/workflow_output.go`、`workflow_log.go` 及对应 repository | `internal/certificate/run` | 保留可查询的节点输出、变量作用域、日志顺序与敏感字段脱敏；授权筛选需在分页/统计前完成。 |
 | 设置 `settings` | `internal/domain/settings.go`；`internal/repository/settings.go`；`internal/settings` | `internal/certificate/settings`，平台通用项进入 Nezha 配置 | 区分证书模块业务设置与独立应用外观/账户/持久化设置。设置缓存刷新由内部服务显式完成，不依赖请求钩子。 |
 | 仪表盘统计 | `internal/statistics`、`internal/repository/statistics.go` | 证书服务查询 + Nezha 原生页面 | 迁移到授权后的内部查询，覆盖证书总量/即将过期/已过期与工作流总量/启用数；复用哪吒统一导航和仪表盘。 |
@@ -42,9 +52,9 @@
 
 上游核心集合名以领域常量为准：`access`、`acme_accounts`、`certificate`、`workflow`、`workflow_run`、`workflow_output`、`workflow_logs`、`settings`。PocketBase 自带 superusers/auth 表属于独立身份体系，不迁入；如需导入旧安装数据，只迁与证书业务相关的记录，并将所有者映射到哪吒用户或平台服务身份。
 
-## 工作流节点与执行器
+## 工作流节点与执行器（迁移目标，当前未全部实现）
 
-节点类型定义于 `internal/domain/workflow.go`，画布和表单位于 `ui/src/components/workflow/designer/`。完整保留 13 种节点类型及嵌套 `Blocks` 结构：
+节点类型定义于 `internal/domain/workflow.go`，画布和表单位于 `ui/src/components/workflow/designer/`。以下是需要兼容的 13 种节点类型及嵌套 `Blocks` 结构，属于迁移目标清单：
 
 | 节点类型 | 上游行为/来源 | 迁移关注点 |
 |---|---|---|
@@ -68,11 +78,11 @@
 | `failed` | 执行失败 | 保留错误分类与节点日志，敏感字段脱敏。 |
 | `canceled` | 已取消 | 取消意图和停止后续副作用需持久化；已提交的外部操作不能假定回滚。 |
 
-运行引擎与分发器主要位于 `internal/workflow/engine/`、`internal/workflow/dispatcher/` 和 `internal/workflow/`。执行需要接入统一取消、超时、并发限制、持久队列/恢复、事件审计及 Dashboard 优雅停止；不能照搬只在内存中的调度和执行状态。
+上游运行引擎与分发器主要位于 `internal/workflow/engine/`、`internal/workflow/dispatcher/` 和 `internal/workflow/`。当前仓库只完成 `internal/workflow` 的持久化、版本、发布和运行历史基础；节点执行器、调度、统一取消/超时、并发限制、持久队列/恢复、事件审计以及 Dashboard 优雅停止后的任务收敛仍待实现，不能把当前 API 基础表述为完整执行引擎。
 
 ## 提供商与适配器盘点
 
-Certimate 的注册式适配器应按能力完整迁移。下列数字是锁定提交中对应目录的 `sp_*.go` 文件数，表示注册适配器源文件数，不等同于 UI 项数或最终支持的 API 操作数。全量逐项 ID 与配置字段应以各 `sp_*.go`、`internal/domain/provider.go` 和对应 `ui/src/components/access/forms/` / `workflow/designer/forms/` 为准。
+Certimate 的注册式适配器应按能力完整迁移。下列数字是锁定提交中对应目录的 `sp_*.go` 文件数，表示注册适配器源文件数，不等同于 UI 项数或最终支持的 API 操作数。全量逐项 ID 与配置字段应以各 `sp_*.go`、`internal/domain/provider.go` 和对应 `ui/src/components/access/forms/` / `workflow/designer/forms/` 为准。下表是迁移目标；当前仅完成统一凭据边界和 DNS Cloudflare 纵切面，不能据此宣称表中 provider 已可用。
 
 | 提供商类别 | 来源目录 | 基线数量 | 迁移处理 |
 |---|---|---:|---|
