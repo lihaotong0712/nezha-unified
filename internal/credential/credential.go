@@ -120,6 +120,9 @@ type Secret struct{ data []byte }
 func NewSecret(data []byte) *Secret { return &Secret{data: append([]byte(nil), data...)} }
 func (s *Secret) Bytes() []byte     { return s.data }
 func (s *Secret) Destroy() {
+	if s == nil {
+		return
+	}
 	clear(s.data)
 	s.data = nil
 }
