@@ -51,7 +51,7 @@
     "Config": "Config",
     "Note": "Note",
     "Success": "Success",
-    "Done": "Finish",
+    "Done": "Done",
     "Offline": "Offline",
     "Failure": "Fail",
     "Loading": "Loading",
@@ -314,9 +314,7 @@
     "ApiTokenExpiryInvalid": "Days must be between 0 and 3650.",
     "NameRequired": "Name is required.",
     "Revoke": "Revoke",
-    "Copy": "Copy",
     "Copied": "Copied to clipboard",
-    "Done": "Done",
     "Scopes": "Scopes",
     "Modules": {
         "navigation": "Platform modules",
@@ -357,7 +355,10 @@
             "dns": {
                 "title": "DNS",
                 "description": "Manage DNS zones and records.",
-                "pending": "DNS zone queries and record management are not connected yet. Continue to use the DDNS page for existing configurations."
+                "pending": "DNS zone queries and record management are not connected yet. Continue to use the DDNS page for existing configurations.",
+                "emptyZones": "No DNS zones are available.",
+                "zones": "Zones",
+                "emptyRecords": "No DNS records match the current filter."
             },
             "credentials": {
                 "title": "Credentials",

@@ -355,7 +355,10 @@
             "dns": {
                 "title": "DNS 管理",
                 "description": "集中管理 DNS 区域与解析记录。",
-                "pending": "DNS 区域查询与记录管理尚未接入。现有 DDNS 配置请继续通过 DDNS 页面管理。"
+                "pending": "DNS 区域查询与记录管理尚未接入。现有 DDNS 配置请继续通过 DDNS 页面管理。",
+                "emptyZones": "暂无可用 DNS 区域",
+                "zones": "区域",
+                "emptyRecords": "没有符合当前筛选条件的 DNS 记录。"
             },
             "credentials": {
                 "title": "凭据管理",

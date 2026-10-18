@@ -53,7 +53,9 @@ test.each([
 ])("direct entry to %s renders the intended page", async (path, title) => {
     await renderPath(path)
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(title)
-    if (path === "/dashboard/certificates") {
+    if (path === "/dashboard/dns") {
+        expect(screen.getByText("No DNS zones are available.")).toBeTruthy()
+    } else if (path === "/dashboard/certificates") {
         expect(screen.getByRole("button", { name: "Upload certificate" })).toBeTruthy()
     } else {
         expect(screen.getByRole("heading", { name: "Feature not connected yet" })).toBeTruthy()

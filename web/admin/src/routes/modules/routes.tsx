@@ -1,6 +1,7 @@
 import { RouteObject } from "react-router-dom"
 
 import { CertificateDetailPage, CertificatesPage } from "./certificates"
+import DNSPage from "./dns"
 import { ModuleErrorBoundary, ModuleErrorState } from "./error"
 import { CertificateLayout, ModuleLayout, WorkflowLayout } from "./layout"
 import { ModulePlaceholder } from "./placeholder"
@@ -16,7 +17,7 @@ export const moduleRoutes: RouteObject[] = [
                     {
                         path: "dns",
                         children: [
-                            { index: true, element: <ModulePlaceholder page="dns" /> },
+                            { index: true, element: <DNSPage /> },
                             { path: "*", element: <ModuleErrorState status={404} /> },
                         ],
                     },
