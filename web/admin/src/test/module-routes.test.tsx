@@ -53,7 +53,11 @@ test.each([
 ])("direct entry to %s renders the intended page", async (path, title) => {
     await renderPath(path)
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(title)
-    expect(screen.getByRole("heading", { name: "Feature not connected yet" })).toBeTruthy()
+    if (path === "/dashboard/certificates") {
+        expect(screen.getByRole("button", { name: "Upload certificate" })).toBeTruthy()
+    } else {
+        expect(screen.getByRole("heading", { name: "Feature not connected yet" })).toBeTruthy()
+    }
 })
 
 test("deep links select only the workflow section and preserve the ID during navigation", async () => {

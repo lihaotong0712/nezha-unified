@@ -324,8 +324,14 @@
         "certificateNavigation": "Certificate navigation",
         "workflowNavigation": "Workflow navigation",
         "backToDashboard": "Back to dashboard",
+        "backToCertificates": "Back to certificates",
         "backToWorkflows": "Back to workflows",
         "workflowId": "Workflow ID: {{id}}",
+        "certificateStatus": {
+            "active": "Active",
+            "expired": "Expired",
+            "revoked": "Revoked"
+        },
         "access": {
             "title": "Access is currently limited",
             "description": "Resource authorization for these modules is not connected yet. Only administrators can access the preview pages."
@@ -361,7 +367,28 @@
             "certificates": {
                 "title": "Certificate assets",
                 "description": "View certificate assets and validity periods.",
-                "pending": "Certificate queries, downloads and renewal actions are not connected yet."
+                "pending": "Certificate queries, downloads and renewal actions are not connected yet.",
+                "detailDescription": "Review safe certificate metadata. Private key material is only returned by an explicit authorized download.",
+                "upload": "Upload certificate",
+                "uploadDescription": "Upload a PEM certificate and its matching private key. The key is encrypted at rest and never shown in this page.",
+                "certificateFile": "Certificate PEM",
+                "privateKeyFile": "Private key PEM",
+                "uploadRequired": "Name, certificate PEM and private key PEM are required.",
+                "created": "Certificate uploaded.",
+                "deleted": "Certificate deleted.",
+                "confirmDelete": "Delete certificate '{{name}}'? This cannot be undone.",
+                "empty": "No certificate assets found.",
+                "notFound": "Certificate not found.",
+                "domains": "Names",
+                "status": "Status",
+                "expires": "Expires",
+                "validFrom": "Valid from",
+                "subject": "Subject",
+                "issuer": "Issuer",
+                "serial": "Serial number",
+                "downloadCertificate": "Download certificate",
+                "downloadPrivate": "Download certificate and private key",
+                "privateKeyNotice": "Private key downloads are separately authorized and audited."
             },
             "workflows": {
                 "title": "Certificate workflows",

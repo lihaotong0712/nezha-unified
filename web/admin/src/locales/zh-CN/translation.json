@@ -322,8 +322,14 @@
         "certificateNavigation": "证书导航",
         "workflowNavigation": "工作流导航",
         "backToDashboard": "返回管理首页",
+        "backToCertificates": "返回证书列表",
         "backToWorkflows": "返回工作流列表",
         "workflowId": "工作流 ID：{{id}}",
+        "certificateStatus": {
+            "active": "有效",
+            "expired": "已过期",
+            "revoked": "已吊销"
+        },
         "access": {
             "title": "暂无法访问",
             "description": "新模块的资源授权尚未接入，目前仅管理员可访问预览页面。"
@@ -359,7 +365,28 @@
             "certificates": {
                 "title": "证书资产",
                 "description": "查看证书资产与有效期。",
-                "pending": "证书查询、下载与续签操作尚未接入。"
+                "pending": "证书查询、下载与续签操作尚未接入。",
+                "detailDescription": "查看安全的证书元数据。私钥仅在明确授权的下载操作中返回。",
+                "upload": "上传证书",
+                "uploadDescription": "上传 PEM 证书及其匹配的私钥。私钥会加密存储，页面不会直接显示。",
+                "certificateFile": "证书 PEM",
+                "privateKeyFile": "私钥 PEM",
+                "uploadRequired": "名称、证书 PEM 和私钥 PEM 均为必填项。",
+                "created": "证书已上传。",
+                "deleted": "证书已删除。",
+                "confirmDelete": "确定删除证书“{{name}}”？此操作不可撤销。",
+                "empty": "暂无证书资产。",
+                "notFound": "证书不存在。",
+                "domains": "名称",
+                "status": "状态",
+                "expires": "到期时间",
+                "validFrom": "生效时间",
+                "subject": "主题",
+                "issuer": "签发者",
+                "serial": "序列号",
+                "downloadCertificate": "下载证书",
+                "downloadPrivate": "下载证书和私钥",
+                "privateKeyNotice": "私钥下载需要单独授权，并会记录审计事件。"
             },
             "workflows": {
                 "title": "证书工作流",

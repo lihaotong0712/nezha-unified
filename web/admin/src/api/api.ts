@@ -26,7 +26,7 @@ let lastestRefreshTokenAt = 0
 const csrfCookieName = "nz-csrf"
 const csrfHeaderName = "X-CSRF-Token"
 
-function readCookie(name: string): string {
+export function readCookie(name: string): string {
     const prefix = name + "="
     for (const part of document.cookie.split(";")) {
         const c = part.trim()
@@ -52,7 +52,7 @@ function isSameOrigin(path: string): boolean {
 
 // Double-submit CSRF: backend requires X-CSRF-Token == nz-csrf cookie on
 // cookie-authenticated unsafe methods.
-function csrfHeaders(method: FetcherMethod, path: string): Record<string, string> {
+export function csrfHeaders(method: FetcherMethod, path: string): Record<string, string> {
     if (!isUnsafeMethod(method)) return {}
     if (!isSameOrigin(path)) return {}
     const token = readCookie(csrfCookieName)
@@ -67,13 +67,16 @@ export async function fetcher<T>(method: FetcherMethod, path: string, data?: any
             headers: csrfHeaders(method, path),
         })
     } else {
+        const isFormData = typeof FormData !== "undefined" && data instanceof FormData
         response = await fetch(path, {
             method: method,
-            headers: {
-                "Content-Type": "application/json",
-                ...csrfHeaders(method, path),
-            },
-            body: data ? JSON.stringify(data) : null,
+            headers: isFormData
+                ? csrfHeaders(method, path)
+                : {
+                      "Content-Type": "application/json",
+                      ...csrfHeaders(method, path),
+                  },
+            body: data ? (isFormData ? data : JSON.stringify(data)) : null,
         })
     }
     if (!response.ok) {

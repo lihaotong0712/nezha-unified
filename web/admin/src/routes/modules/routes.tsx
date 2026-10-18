@@ -1,5 +1,6 @@
 import { RouteObject } from "react-router-dom"
 
+import { CertificateDetailPage, CertificatesPage } from "./certificates"
 import { ModuleErrorBoundary, ModuleErrorState } from "./error"
 import { CertificateLayout, ModuleLayout, WorkflowLayout } from "./layout"
 import { ModulePlaceholder } from "./placeholder"
@@ -30,7 +31,8 @@ export const moduleRoutes: RouteObject[] = [
                         path: "certificates",
                         element: <CertificateLayout />,
                         children: [
-                            { index: true, element: <ModulePlaceholder page="certificates" /> },
+                            { index: true, element: <CertificatesPage /> },
+                            { path: ":id", element: <CertificateDetailPage /> },
                             { path: "workflows", element: <ModulePlaceholder page="workflows" /> },
                             {
                                 path: "workflows/:id",
