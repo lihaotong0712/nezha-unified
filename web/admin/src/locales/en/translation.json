@@ -317,5 +317,72 @@
     "Copy": "Copy",
     "Copied": "Copied to clipboard",
     "Done": "Done",
-    "Scopes": "Scopes"
+    "Scopes": "Scopes",
+    "Modules": {
+        "navigation": "Platform modules",
+        "certificates": "Certificates",
+        "certificateNavigation": "Certificate navigation",
+        "workflowNavigation": "Workflow navigation",
+        "backToDashboard": "Back to dashboard",
+        "backToWorkflows": "Back to workflows",
+        "workflowId": "Workflow ID: {{id}}",
+        "access": {
+            "title": "Access is currently limited",
+            "description": "Resource authorization for these modules is not connected yet. Only administrators can access the preview pages."
+        },
+        "pending": {
+            "title": "Feature not connected yet"
+        },
+        "errors": {
+            "forbidden": {
+                "title": "Access denied",
+                "description": "You do not have permission to access this resource. Contact an administrator to request access."
+            },
+            "notFound": {
+                "title": "Page not found",
+                "description": "This module page does not exist. Check the address or choose a page from the navigation."
+            },
+            "unexpected": {
+                "title": "Unable to load this page",
+                "description": "An error prevented this page from loading. Reload the page to try again, or return to the dashboard."
+            }
+        },
+        "pages": {
+            "dns": {
+                "title": "DNS",
+                "description": "Manage DNS zones and records.",
+                "pending": "DNS zone queries and record management are not connected yet. Continue to use the DDNS page for existing configurations."
+            },
+            "credentials": {
+                "title": "Credentials",
+                "description": "Manage credentials used by DNS and certificate workflows.",
+                "pending": "Credential management is not connected yet. Credentials cannot be created, viewed or changed on this page."
+            },
+            "certificates": {
+                "title": "Certificate assets",
+                "description": "View certificate assets and validity periods.",
+                "pending": "Certificate queries, downloads and renewal actions are not connected yet."
+            },
+            "workflows": {
+                "title": "Certificate workflows",
+                "description": "Manage certificate issuance, renewal and deployment workflows.",
+                "pending": "The workflow list and execution actions are not connected yet."
+            },
+            "design": {
+                "title": "Workflow design",
+                "description": "Configure workflow nodes and connections.",
+                "pending": "The workflow designer is not connected yet. No workflow has been loaded or saved."
+            },
+            "runs": {
+                "title": "Run history",
+                "description": "View workflow runs and execution logs.",
+                "pending": "Run history and logs are not connected yet. No workflow data has been loaded."
+            },
+            "presets": {
+                "title": "Certificate presets",
+                "description": "Manage reusable certificate workflow presets.",
+                "pending": "Preset queries and management are not connected yet."
+            }
+        }
+    }
 }

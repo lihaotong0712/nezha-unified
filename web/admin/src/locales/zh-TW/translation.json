@@ -315,5 +315,72 @@
     "CopiedToClipboard": "已複製到剪貼簿",
     "ClipboardWriteFailed": "寫入剪貼簿失敗",
     "PastedFromClipboard": "已從剪貼簿貼上",
-    "ClipboardReadFailed": "讀取剪貼簿失敗"
+    "ClipboardReadFailed": "讀取剪貼簿失敗",
+    "Modules": {
+        "navigation": "平台模組",
+        "certificates": "憑證管理",
+        "certificateNavigation": "憑證導覽",
+        "workflowNavigation": "工作流程導覽",
+        "backToDashboard": "返回管理首頁",
+        "backToWorkflows": "返回工作流程清單",
+        "workflowId": "工作流程 ID：{{id}}",
+        "access": {
+            "title": "暫時無法存取",
+            "description": "新模組的資源授權尚未接入，目前僅管理員可存取預覽頁面。"
+        },
+        "pending": {
+            "title": "功能尚未接入"
+        },
+        "errors": {
+            "forbidden": {
+                "title": "無權存取",
+                "description": "目前帳號沒有存取此資源的權限。請聯絡管理員申請授權。"
+            },
+            "notFound": {
+                "title": "頁面不存在",
+                "description": "此模組頁面不存在。請檢查網址，或透過導覽選擇頁面。"
+            },
+            "unexpected": {
+                "title": "頁面載入失敗",
+                "description": "發生錯誤，頁面無法載入。請重新整理頁面再試，或返回管理首頁。"
+            }
+        },
+        "pages": {
+            "dns": {
+                "title": "DNS 管理",
+                "description": "集中管理 DNS 區域與解析記錄。",
+                "pending": "DNS 區域查詢與記錄管理尚未接入。現有 DDNS 設定請繼續透過 DDNS 頁面管理。"
+            },
+            "credentials": {
+                "title": "認證資訊",
+                "description": "統一管理 DNS 與憑證工作流程使用的認證資訊。",
+                "pending": "認證資訊管理尚未接入，目前頁面無法建立、檢視或修改認證資訊。"
+            },
+            "certificates": {
+                "title": "憑證資產",
+                "description": "檢視憑證資產與有效期限。",
+                "pending": "憑證查詢、下載與續期操作尚未接入。"
+            },
+            "workflows": {
+                "title": "憑證工作流程",
+                "description": "管理憑證簽發、續期與部署工作流程。",
+                "pending": "工作流程清單與執行操作尚未接入。"
+            },
+            "design": {
+                "title": "工作流程設計",
+                "description": "設定工作流程節點與連線。",
+                "pending": "工作流程設計器尚未接入，目前頁面未載入或儲存任何工作流程。"
+            },
+            "runs": {
+                "title": "執行記錄",
+                "description": "檢視工作流程執行歷程與日誌。",
+                "pending": "執行記錄與日誌尚未接入，目前頁面未載入工作流程資料。"
+            },
+            "presets": {
+                "title": "憑證預設",
+                "description": "管理可重複使用的憑證工作流程預設。",
+                "pending": "預設查詢與管理尚未接入。"
+            }
+        }
+    }
 }

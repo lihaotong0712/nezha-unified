@@ -315,5 +315,72 @@
     "NameRequired": "名称必填。",
     "Revoke": "吊销",
     "Copied": "已复制到剪贴板",
-    "Scopes": "权限"
+    "Scopes": "权限",
+    "Modules": {
+        "navigation": "平台模块",
+        "certificates": "证书管理",
+        "certificateNavigation": "证书导航",
+        "workflowNavigation": "工作流导航",
+        "backToDashboard": "返回管理首页",
+        "backToWorkflows": "返回工作流列表",
+        "workflowId": "工作流 ID：{{id}}",
+        "access": {
+            "title": "暂无法访问",
+            "description": "新模块的资源授权尚未接入，目前仅管理员可访问预览页面。"
+        },
+        "pending": {
+            "title": "功能尚未接入"
+        },
+        "errors": {
+            "forbidden": {
+                "title": "无权访问",
+                "description": "当前账号没有访问此资源的权限。请联系管理员申请授权。"
+            },
+            "notFound": {
+                "title": "页面不存在",
+                "description": "此模块页面不存在。请检查地址，或通过导航选择页面。"
+            },
+            "unexpected": {
+                "title": "页面加载失败",
+                "description": "发生错误，页面无法加载。请刷新页面重试，或返回管理首页。"
+            }
+        },
+        "pages": {
+            "dns": {
+                "title": "DNS 管理",
+                "description": "集中管理 DNS 区域与解析记录。",
+                "pending": "DNS 区域查询与记录管理尚未接入。现有 DDNS 配置请继续通过 DDNS 页面管理。"
+            },
+            "credentials": {
+                "title": "凭据管理",
+                "description": "统一管理 DNS 与证书工作流使用的凭据。",
+                "pending": "凭据管理尚未接入，当前页面无法创建、查看或修改凭据。"
+            },
+            "certificates": {
+                "title": "证书资产",
+                "description": "查看证书资产与有效期。",
+                "pending": "证书查询、下载与续签操作尚未接入。"
+            },
+            "workflows": {
+                "title": "证书工作流",
+                "description": "管理证书签发、续签与部署工作流。",
+                "pending": "工作流列表与执行操作尚未接入。"
+            },
+            "design": {
+                "title": "工作流设计",
+                "description": "配置工作流节点与连接。",
+                "pending": "工作流设计器尚未接入，当前页面未加载或保存任何工作流。"
+            },
+            "runs": {
+                "title": "运行记录",
+                "description": "查看工作流运行历史与执行日志。",
+                "pending": "运行记录与日志尚未接入，当前页面未加载工作流数据。"
+            },
+            "presets": {
+                "title": "证书预设",
+                "description": "管理可复用的证书工作流预设。",
+                "pending": "预设查询与管理尚未接入。"
+            }
+        }
+    }
 }

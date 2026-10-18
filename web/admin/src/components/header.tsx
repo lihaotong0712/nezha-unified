@@ -1,4 +1,5 @@
 import { ModeToggle } from "@/components/mode-toggle"
+import { ModuleNavigation } from "@/components/module-navigation"
 import {
     Drawer,
     DrawerClose,
@@ -261,6 +262,7 @@ export default function Header() {
                         </>
                     )}
                 </div>
+                {profile && <ModuleNavigation />}
             </NavigationMenu>
         </header>
     ) : (
@@ -291,6 +293,9 @@ export default function Header() {
                                         {item.label}
                                     </Link>
                                 ))}
+                            </div>
+                            <div className="border-t px-4">
+                                <ModuleNavigation onNavigate={() => setOpen(false)} />
                             </div>
                             <DrawerFooter>
                                 <DrawerClose asChild>
