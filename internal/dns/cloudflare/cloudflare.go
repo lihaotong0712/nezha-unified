@@ -193,7 +193,7 @@ func (p *Provider) ListRecords(ctx context.Context, zone dns.Zone, filter dns.Re
 		return dns.Page[dns.Record]{}, err
 	}
 	if filter.Line != "" {
-		return dns.Page[dns.Record]{Items: []dns.Record{}}, nil
+		return dns.Page[dns.Record]{}, unsupported("Cloudflare does not support DNS record lines")
 	}
 	query := pageQuery(pageNo, page.Limit)
 	if filter.Name != "" {

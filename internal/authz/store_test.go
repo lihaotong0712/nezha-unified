@@ -98,6 +98,31 @@ func TestGORMAuthorizerRejectsMalformedPATWhitelistForEveryResource(t *testing.T
 	}
 }
 
+func TestGORMAuthorizerFailsClosedWhenScopedFactsAreMissing(t *testing.T) {
+	authorizer := newAuthzStoreTest(t)
+	if err := authorizer.PutGrant(context.Background(), PolicyGrant{
+		ID: "grant-dns", Principal: User(7), Resource: resource.Ref{Kind: resource.DNSZone, ID: "zone-1"},
+		Actions: []Action{Edit}, DNS: []DNSScope{{Zone: resource.Ref{Kind: resource.DNSZone, ID: "zone-1"}, Pattern: "example.com.", RecordType: "A"}}, PolicyVersion: "v1", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.PutGrant(context.Background(), PolicyGrant{
+		ID: "grant-cert", Principal: User(7), Resource: resource.Ref{Kind: resource.Certificate, ID: "cert-1"},
+		Actions: []Action{Download}, CertificateNames: []string{"example.com."}, PolicyVersion: "v1", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	execution := Execution{Subject: User(7), TriggeredBy: User(7), Entry: Session, OperationID: "facts-missing"}
+	decision, err := authorizer.Authorize(context.Background(), Request{Execution: execution, Action: Edit, Resource: resource.Ref{Kind: resource.DNSZone, ID: "zone-1"}})
+	if err != nil || decision.Allowed {
+		t.Fatalf("scoped DNS grant without facts = %+v, %v; must deny", decision, err)
+	}
+	decision, err = authorizer.Authorize(context.Background(), Request{Execution: execution, Action: Download, Resource: resource.Ref{Kind: resource.Certificate, ID: "cert-1"}})
+	if err != nil || decision.Allowed {
+		t.Fatalf("scoped certificate grant without SAN facts = %+v, %v; must deny", decision, err)
+	}
+}
+
 func TestGORMAuthorizerReloadsAndFiltersCurrentGrants(t *testing.T) {
 	authorizer := newAuthzStoreTest(t)
 	if err := authorizer.PutGrant(context.Background(), serverGrant("grant-1", 2)); err != nil {

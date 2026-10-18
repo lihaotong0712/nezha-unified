@@ -177,6 +177,15 @@ func (s *GORMStore) Bundle(ctx context.Context, ref resource.Ref, includePrivate
 	if err != nil {
 		return Bundle{}, err
 	}
+	if !includePrivate {
+		if reader, ok := s.materials.(CertificateMaterialReader); ok {
+			certificatePEM, err := reader.GetCertificate(ctx, ref)
+			if err != nil {
+				return Bundle{}, err
+			}
+			return Bundle{Record: record, Certificate: certificatePEM}, nil
+		}
+	}
 	certificatePEM, privateKeyPEM, err := s.materials.Get(ctx, ref)
 	if err != nil {
 		return Bundle{}, err
@@ -198,12 +207,16 @@ type AESGCMMaterialStore struct {
 }
 
 type materialRow struct {
-	RefID      string    `gorm:"primaryKey;size:255"`
-	KeyID      string    `gorm:"not null;size:255"`
-	Nonce      []byte    `gorm:"not null;type:blob"`
-	Ciphertext []byte    `gorm:"not null;type:blob"`
-	CreatedAt  time.Time `gorm:"not null"`
-	UpdatedAt  time.Time `gorm:"not null"`
+	RefID                 string    `gorm:"primaryKey;size:255"`
+	KeyID                 string    `gorm:"not null;size:255"`
+	Nonce                 []byte    `gorm:"type:blob"` // legacy combined envelope
+	Ciphertext            []byte    `gorm:"type:blob"` // legacy combined envelope
+	CertificateNonce      []byte    `gorm:"type:blob"`
+	CertificateCiphertext []byte    `gorm:"type:blob"`
+	PrivateKeyNonce       []byte    `gorm:"type:blob"`
+	PrivateKeyCiphertext  []byte    `gorm:"type:blob"`
+	CreatedAt             time.Time `gorm:"not null"`
+	UpdatedAt             time.Time `gorm:"not null"`
 }
 
 func (materialRow) TableName() string { return "platform_certificate_materials" }
@@ -227,6 +240,8 @@ func NewAESGCMMaterialStore(db *gorm.DB, keyID string, key []byte) (*AESGCMMater
 }
 
 func materialAAD(ref resource.Ref, keyID string) []byte {
+	// Keep the original envelope AAD byte-for-byte stable so records written
+	// before the certificate/key split remain decryptable after migration.
 	h := sha256.New()
 	_, _ = h.Write([]byte("nezha-unified/certificate/v1"))
 	_, _ = h.Write([]byte{0})
@@ -235,6 +250,20 @@ func materialAAD(ref resource.Ref, keyID string) []byte {
 	_, _ = h.Write([]byte(ref.ID))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(keyID))
+	return h.Sum(nil)
+}
+
+func materialRoleAAD(ref resource.Ref, keyID, role string) []byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte("nezha-unified/certificate/v1"))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(ref.Kind))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(ref.ID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(keyID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(role))
 	return h.Sum(nil)
 }
 
@@ -264,13 +293,18 @@ func (s *AESGCMMaterialStore) Put(ctx context.Context, ref resource.Ref, certifi
 	if s == nil || s.db == nil || s.aead == nil || ref.Kind != resource.Certificate || ref.Validate() != nil || len(certificatePEM) == 0 || len(privateKeyPEM) == 0 {
 		return ErrInvalidCertificate
 	}
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	certificateNonce := make([]byte, s.aead.NonceSize())
+	privateKeyNonce := make([]byte, s.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, certificateNonce); err != nil {
 		return err
 	}
-	ciphertext := s.aead.Seal(nil, nonce, encodeMaterial(certificatePEM, privateKeyPEM), materialAAD(ref, s.keyID))
+	if _, err := io.ReadFull(rand.Reader, privateKeyNonce); err != nil {
+		return err
+	}
+	certificateCiphertext := s.aead.Seal(nil, certificateNonce, certificatePEM, materialRoleAAD(ref, s.keyID, "certificate"))
+	privateKeyCiphertext := s.aead.Seal(nil, privateKeyNonce, privateKeyPEM, materialRoleAAD(ref, s.keyID, "private-key"))
 	now := time.Now().UTC()
-	err := s.db.WithContext(ctx).Create(&materialRow{RefID: ref.ID, KeyID: s.keyID, Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now}).Error
+	err := s.db.WithContext(ctx).Create(&materialRow{RefID: ref.ID, KeyID: s.keyID, CertificateNonce: certificateNonce, CertificateCiphertext: certificateCiphertext, PrivateKeyNonce: privateKeyNonce, PrivateKeyCiphertext: privateKeyCiphertext, CreatedAt: now, UpdatedAt: now}).Error
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		return ErrConflict
 	}
@@ -288,8 +322,23 @@ func (s *AESGCMMaterialStore) Get(ctx context.Context, ref resource.Ref) ([]byte
 		}
 		return nil, nil, err
 	}
-	if row.KeyID != s.keyID || len(row.Nonce) != s.aead.NonceSize() {
+	if row.KeyID != s.keyID {
 		return nil, nil, errors.New("certificate material key is unavailable")
+	}
+	if len(row.CertificateCiphertext) > 0 || len(row.PrivateKeyCiphertext) > 0 {
+		certificatePEM, err := s.decryptPart(ref, row.KeyID, row.CertificateNonce, row.CertificateCiphertext, "certificate")
+		if err != nil {
+			return nil, nil, err
+		}
+		privateKeyPEM, err := s.decryptPart(ref, row.KeyID, row.PrivateKeyNonce, row.PrivateKeyCiphertext, "private-key")
+		if err != nil {
+			clear(certificatePEM)
+			return nil, nil, err
+		}
+		return certificatePEM, privateKeyPEM, nil
+	}
+	if len(row.Nonce) != s.aead.NonceSize() {
+		return nil, nil, errors.New("certificate material nonce is invalid")
 	}
 	plaintext, err := s.aead.Open(nil, row.Nonce, row.Ciphertext, materialAAD(ref, row.KeyID))
 	if err != nil {
@@ -301,6 +350,43 @@ func (s *AESGCMMaterialStore) Get(ctx context.Context, ref resource.Ref) ([]byte
 		return nil, nil, err
 	}
 	return certificatePEM, privateKeyPEM, nil
+}
+
+func (s *AESGCMMaterialStore) GetCertificate(ctx context.Context, ref resource.Ref) ([]byte, error) {
+	if s == nil || s.db == nil || s.aead == nil || ref.Kind != resource.Certificate || ref.Validate() != nil {
+		return nil, ErrNotFound
+	}
+	var row materialRow
+	// Public-only downloads must not select the encrypted private-key columns.
+	// Legacy rows still need the combined envelope fields for the compatibility
+	// fallback below.
+	if err := s.db.WithContext(ctx).
+		Select("ref_id", "key_id", "nonce", "ciphertext", "certificate_nonce", "certificate_ciphertext", "created_at", "updated_at").
+		First(&row, "ref_id = ?", ref.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if row.KeyID != s.keyID {
+		return nil, errors.New("certificate material key is unavailable")
+	}
+	if len(row.CertificateCiphertext) == 0 {
+		certificatePEM, _, err := s.Get(ctx, ref)
+		return certificatePEM, err
+	}
+	return s.decryptPart(ref, row.KeyID, row.CertificateNonce, row.CertificateCiphertext, "certificate")
+}
+
+func (s *AESGCMMaterialStore) decryptPart(ref resource.Ref, keyID string, nonce, ciphertext []byte, role string) ([]byte, error) {
+	if len(nonce) != s.aead.NonceSize() || len(ciphertext) < s.aead.Overhead() {
+		return nil, errors.New("certificate material envelope is invalid")
+	}
+	plaintext, err := s.aead.Open(nil, nonce, ciphertext, materialRoleAAD(ref, keyID, role))
+	if err != nil {
+		return nil, errors.New("certificate material authentication failed")
+	}
+	return plaintext, nil
 }
 
 func (s *AESGCMMaterialStore) Delete(ctx context.Context, ref resource.Ref) error {

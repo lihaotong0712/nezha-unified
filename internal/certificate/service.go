@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"strings"
 	"time"
 
@@ -78,7 +77,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		return Record{}, err
 	}
 	if err := s.store.Create(ctx, record, parsed.CertificatePEM, parsed.PrivateKeyPEM); err != nil {
-		_ = s.record(ctx, audit.Event{ID: eventID(req.Execution.OperationID, "create-failed", id), Time: s.now(), Execution: req.Execution, Action: authz.Edit, Resource: ref, Outcome: audit.Failed, Code: platformerr.Conflict, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs})
+		_ = s.record(ctx, audit.Event{ID: eventID(req.Execution.OperationID, "create-failed", id), Time: s.now(), Execution: req.Execution, Action: authz.Edit, Resource: ref, Outcome: audit.Failed, Code: platformerr.From(err, req.Execution.OperationID).Code, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: record.Revision})
 		return Record{}, platformerr.From(err, req.Execution.OperationID)
 	}
 	_ = s.record(ctx, audit.Event{ID: eventID(req.Execution.OperationID, "create-succeeded", id), Time: s.now(), Execution: req.Execution, Action: authz.Edit, Resource: ref, Outcome: audit.Succeeded, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: record.Revision})
@@ -97,11 +96,6 @@ func (s *Service) Get(ctx context.Context, execution authz.Execution, ref resour
 }
 
 func (s *Service) List(ctx context.Context, execution authz.Execution, ownerID uint64) ([]Record, error) {
-	if execution.Subject.Kind == authz.UserPrincipal && execution.Subject.ID != fmt.Sprint(ownerID) {
-		// The authorizer still controls delegated access. Owner filtering keeps
-		// accidental cross-user list results from becoming a data leak.
-		return nil, platformerr.New(platformerr.Forbidden, execution.OperationID, nil)
-	}
 	records, err := s.store.List(ctx, ownerID)
 	if err != nil {
 		return nil, platformerr.From(err, execution.OperationID)
@@ -120,24 +114,42 @@ func (s *Service) Download(ctx context.Context, execution authz.Execution, ref r
 	if err != nil {
 		return Bundle{}, platformerr.From(err, execution.OperationID)
 	}
-	decision, err := s.check(ctx, execution, authz.Download, ref, certificateNames(record))
+	downloadDecision, err := s.check(ctx, execution, authz.Download, ref, certificateNames(record))
 	if err != nil {
 		return Bundle{}, err
 	}
+	revealDecision := authz.Decision{}
 	if includePrivate {
-		decision, err = s.check(ctx, execution, authz.Reveal, ref, certificateNames(record))
+		revealDecision, err = s.check(ctx, execution, authz.Reveal, ref, certificateNames(record))
 		if err != nil {
 			return Bundle{}, err
 		}
 	}
 	now := s.now()
-	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "download", ref.ID), Time: now, Execution: execution, Action: authz.Download, Resource: ref, Outcome: audit.Requested, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: record.Revision}); err != nil {
+	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "download-requested", ref.ID), Time: now, Execution: execution, Action: authz.Download, Resource: ref, Outcome: audit.Requested, PolicyVersion: downloadDecision.PolicyVersion, GrantIDs: downloadDecision.GrantIDs, ResourceRevision: record.Revision}); err != nil {
 		return Bundle{}, err
+	}
+	if includePrivate {
+		if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "reveal-requested", ref.ID), Time: s.now(), Execution: execution, Action: authz.Reveal, Resource: ref, Outcome: audit.Requested, PolicyVersion: revealDecision.PolicyVersion, GrantIDs: revealDecision.GrantIDs, ResourceRevision: record.Revision}); err != nil {
+			return Bundle{}, err
+		}
 	}
 	bundle, err := s.store.Bundle(ctx, ref, includePrivate)
 	if err != nil {
-		_ = s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "download-failed", ref.ID), Time: s.now(), Execution: execution, Action: authz.Download, Resource: ref, Outcome: audit.Failed, Code: platformerr.From(err, execution.OperationID).Code})
+		failureCode := platformerr.From(err, execution.OperationID).Code
+		_ = s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "download-failed", ref.ID), Time: s.now(), Execution: execution, Action: authz.Download, Resource: ref, Outcome: audit.Failed, Code: failureCode, PolicyVersion: downloadDecision.PolicyVersion, GrantIDs: downloadDecision.GrantIDs, ResourceRevision: record.Revision})
+		if includePrivate {
+			_ = s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "reveal-failed", ref.ID), Time: s.now(), Execution: execution, Action: authz.Reveal, Resource: ref, Outcome: audit.Failed, Code: failureCode, PolicyVersion: revealDecision.PolicyVersion, GrantIDs: revealDecision.GrantIDs, ResourceRevision: record.Revision})
+		}
 		return Bundle{}, platformerr.From(err, execution.OperationID)
+	}
+	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "download-succeeded", ref.ID), Time: s.now(), Execution: execution, Action: authz.Download, Resource: ref, Outcome: audit.Succeeded, PolicyVersion: downloadDecision.PolicyVersion, GrantIDs: downloadDecision.GrantIDs, ResourceRevision: record.Revision}); err != nil {
+		return Bundle{}, err
+	}
+	if includePrivate {
+		if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "reveal-succeeded", ref.ID), Time: s.now(), Execution: execution, Action: authz.Reveal, Resource: ref, Outcome: audit.Succeeded, PolicyVersion: revealDecision.PolicyVersion, GrantIDs: revealDecision.GrantIDs, ResourceRevision: record.Revision}); err != nil {
+			return Bundle{}, err
+		}
 	}
 	return bundle, nil
 }
@@ -155,7 +167,11 @@ func (s *Service) Delete(ctx context.Context, execution authz.Execution, ref res
 		return err
 	}
 	if err := s.store.Delete(ctx, ref); err != nil {
+		_ = s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "delete-failed", ref.ID), Time: s.now(), Execution: execution, Action: authz.Delete, Resource: ref, Outcome: audit.Failed, Code: platformerr.From(err, execution.OperationID).Code, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: record.Revision})
 		return platformerr.From(err, execution.OperationID)
+	}
+	if err := s.record(ctx, audit.Event{ID: eventID(execution.OperationID, "delete-succeeded", ref.ID), Time: s.now(), Execution: execution, Action: authz.Delete, Resource: ref, Outcome: audit.Succeeded, PolicyVersion: decision.PolicyVersion, GrantIDs: decision.GrantIDs, ResourceRevision: record.Revision}); err != nil {
+		return err
 	}
 	return nil
 }

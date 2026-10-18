@@ -30,6 +30,13 @@ type Store interface {
 	Bundle(context.Context, resource.Ref, bool) (Bundle, error)
 }
 
+// CertificateMaterialReader is an optional narrow read path for public-only
+// downloads. Implementations should avoid loading the private key at all when
+// the caller has not been granted reveal permission.
+type CertificateMaterialReader interface {
+	GetCertificate(context.Context, resource.Ref) ([]byte, error)
+}
+
 type storedCertificate struct {
 	record      Record
 	certificate []byte

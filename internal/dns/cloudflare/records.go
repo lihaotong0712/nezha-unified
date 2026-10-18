@@ -116,9 +116,19 @@ func recordBody(zone dns.Zone, data dns.RecordData, update bool) (map[string]any
 	if _, ok := writableTypes[typ]; !ok {
 		return nil, unsupported("Cloudflare record type is not supported by this adapter")
 	}
+	if data.Proxied != nil {
+		switch typ {
+		case "A", "AAAA", "CNAME":
+		default:
+			return nil, unsupported("Cloudflare proxying is supported only for A, AAAA and CNAME records")
+		}
+	}
 	ttl, err := encodeTTL(data.TTL)
 	if err != nil {
 		return nil, err
+	}
+	if data.Proxied != nil && *data.Proxied && data.TTL.Mode != dns.TTLAutomatic {
+		return nil, unsupported("Cloudflare proxied records require automatic TTL")
 	}
 	body := map[string]any{
 		"name": apiName(name),

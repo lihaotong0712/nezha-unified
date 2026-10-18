@@ -381,6 +381,13 @@ func grantTargetsRequest(grant PolicyGrant, req Request) bool {
 		}
 	}
 	if len(grant.DNS) > 0 {
+		// A grant with an explicit DNS boundary must never authorize a request
+		// that omitted the concrete names being operated on. Treat missing
+		// server-resolved facts as an authorization failure rather than as an
+		// empty set that happens to pass the loop below.
+		if len(req.DNS) == 0 {
+			return false
+		}
 		for _, requested := range req.DNS {
 			matched := false
 			for _, scope := range grant.DNS {
@@ -395,6 +402,12 @@ func grantTargetsRequest(grant PolicyGrant, req Request) bool {
 		}
 	}
 	if len(grant.CertificateNames) > 0 {
+		// Certificate scope is likewise fail-closed when the caller did not
+		// provide the resolved SANs. The browser-supplied certificate label is
+		// not sufficient evidence for this check.
+		if len(req.CertificateNames) == 0 {
+			return false
+		}
 		for _, requested := range req.CertificateNames {
 			matched := false
 			for _, pattern := range grant.CertificateNames {

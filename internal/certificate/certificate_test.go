@@ -8,11 +8,14 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 
 	"github.com/nezhahq/nezha/internal/audit"
 	"github.com/nezhahq/nezha/internal/authz"
@@ -122,6 +125,46 @@ func TestServiceRechecksDownloadAuthorization(t *testing.T) {
 	require.Equal(t, platformerr.Forbidden, publicErr.Code)
 }
 
+func TestServiceListAllowsDelegatedOwnerThroughAuthorizer(t *testing.T) {
+	certPEM, keyPEM := makeCertificate(t, []string{"example.com"})
+	service := NewService(NewMemoryStore(), allowAuthorizer{}, nil)
+	if _, err := service.Create(context.Background(), CreateRequest{Execution: execution(), OwnerID: 8, Name: "delegated", Source: SourceUpload, CertificatePEM: certPEM, PrivateKeyPEM: keyPEM}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.List(context.Background(), execution(), 8)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("delegated list = %+v, %v", got, err)
+	}
+}
+
+func TestServiceAuditsRevealAndDeleteOutcomes(t *testing.T) {
+	certPEM, keyPEM := makeCertificate(t, []string{"example.com"})
+	recorder := new(recordingAudit)
+	service := NewService(NewMemoryStore(), allowAuthorizer{}, recorder)
+	record, err := service.Create(context.Background(), CreateRequest{Execution: execution(), OwnerID: 7, Name: "audit", Source: SourceUpload, CertificatePEM: certPEM, PrivateKeyPEM: keyPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Download(context.Background(), execution(), record.Ref, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(context.Background(), execution(), record.Ref); err != nil {
+		t.Fatal(err)
+	}
+	var revealSucceeded, deleteSucceeded bool
+	for _, event := range recorder.events {
+		if event.Action == authz.Reveal && event.Outcome == audit.Succeeded {
+			revealSucceeded = true
+		}
+		if event.Action == authz.Delete && event.Outcome == audit.Succeeded {
+			deleteSucceeded = true
+		}
+	}
+	if !revealSucceeded || !deleteSucceeded {
+		t.Fatalf("missing success audit events: %+v", recorder.events)
+	}
+}
+
 func TestMemoryStoreRejectsInvalidMetadata(t *testing.T) {
 	store := NewMemoryStore()
 	err := store.Create(context.Background(), Record{Ref: resource.Ref{Kind: resource.Certificate, ID: "x"}}, []byte("cert"), []byte("key"))
@@ -129,4 +172,90 @@ func TestMemoryStoreRejectsInvalidMetadata(t *testing.T) {
 	_, err = store.Get(context.Background(), resource.Ref{Kind: resource.Certificate, ID: "missing"})
 	require.ErrorIs(t, err, ErrNotFound)
 	require.True(t, errors.Is(err, ErrNotFound))
+}
+
+func TestAESGCMMaterialStoreSplitEnvelopeAndNarrowRead(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	require.NoError(t, err)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	materials, err := NewAESGCMMaterialStore(db, "key-1", key)
+	require.NoError(t, err)
+	store, err := NewGORMStore(db, materials)
+	require.NoError(t, err)
+
+	certificatePEM, privateKeyPEM := makeCertificate(t, []string{"example.com"})
+	parsed, err := ParsePEM(certificatePEM, privateKeyPEM)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	ref := resource.Ref{Kind: resource.Certificate, ID: "cert-gorm"}
+	record := Record{
+		Ref: ref, OwnerID: 7, Name: "gorm", Source: SourceUpload, Status: StatusActive,
+		SerialNumber: parsed.SerialNumber, Subject: parsed.Subject, Issuer: parsed.Issuer,
+		DNSNames: parsed.DNSNames, IPAddresses: parsed.IPAddresses, NotBefore: parsed.NotBefore,
+		NotAfter: parsed.NotAfter, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, store.Create(context.Background(), record, certificatePEM, privateKeyPEM))
+
+	gotCertificate, gotPrivateKey, err := materials.Get(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, certificatePEM, gotCertificate)
+	require.Equal(t, privateKeyPEM, gotPrivateKey)
+
+	public, err := store.Bundle(context.Background(), ref, false)
+	require.NoError(t, err)
+	require.Equal(t, certificatePEM, public.Certificate)
+	require.Empty(t, public.PrivateKey)
+
+	var row materialRow
+	require.NoError(t, db.First(&row, "ref_id = ?", ref.ID).Error)
+	require.NotEmpty(t, row.PrivateKeyCiphertext)
+	corruptPrivate := append([]byte(nil), row.PrivateKeyCiphertext...)
+	corruptPrivate[0] ^= 0xff
+	require.NoError(t, db.Model(&materialRow{}).Where("ref_id = ?", ref.ID).Update("private_key_ciphertext", corruptPrivate).Error)
+
+	// The narrow read path still succeeds because it does not select or decrypt
+	// the private-key envelope. A reveal download must fail closed instead.
+	public, err = store.Bundle(context.Background(), ref, false)
+	require.NoError(t, err)
+	require.Equal(t, certificatePEM, public.Certificate)
+	_, err = store.Bundle(context.Background(), ref, true)
+	require.Error(t, err)
+
+	corruptCertificate := append([]byte(nil), row.CertificateCiphertext...)
+	corruptCertificate[0] ^= 0xff
+	require.NoError(t, db.Model(&materialRow{}).Where("ref_id = ?", ref.ID).Update("certificate_ciphertext", corruptCertificate).Error)
+	_, err = materials.GetCertificate(context.Background(), ref)
+	require.Error(t, err)
+}
+
+func TestAESGCMMaterialStoreReadsLegacyCombinedEnvelope(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	require.NoError(t, err)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(0xa0 + i)
+	}
+	materials, err := NewAESGCMMaterialStore(db, "legacy-key", key)
+	require.NoError(t, err)
+	ref := resource.Ref{Kind: resource.Certificate, ID: "cert-legacy"}
+	certificatePEM := []byte("legacy certificate")
+	privateKeyPEM := []byte("legacy private key")
+	nonce := make([]byte, materials.aead.NonceSize())
+	for i := range nonce {
+		nonce[i] = byte(i + 1)
+	}
+	ciphertext := materials.aead.Seal(nil, nonce, encodeMaterial(certificatePEM, privateKeyPEM), materialAAD(ref, materials.keyID))
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&materialRow{RefID: ref.ID, KeyID: materials.keyID, Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now}).Error)
+
+	gotCertificate, gotPrivateKey, err := materials.Get(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, certificatePEM, gotCertificate)
+	require.Equal(t, privateKeyPEM, gotPrivateKey)
+	gotCertificate, err = materials.GetCertificate(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, certificatePEM, gotCertificate)
 }

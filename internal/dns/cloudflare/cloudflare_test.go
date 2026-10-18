@@ -98,7 +98,7 @@ func TestCreateUpdateDeleteUseRecordIDAndPreserveFields(t *testing.T) {
 	zone := dns.Zone{ID: "zone-a", Name: "example.com."}
 	before := dns.Record{ID: "record-a", RecordData: dns.RecordData{
 		Name: "www.example.com.", Type: "TXT", Value: `"old" "chunk"`, TTL: dns.TTL{Mode: dns.TTLAutomatic},
-		Proxied: boolPtr(false), Comment: stringPtr("old comment"), Extensions: map[string]json.RawMessage{"tags": json.RawMessage(`["managed"]`)},
+		Comment: stringPtr("old comment"), Extensions: map[string]json.RawMessage{"tags": json.RawMessage(`["managed"]`)},
 	}}
 	var patchBody map[string]any
 	mock.Handle(http.MethodPost, "/zones/zone-a/dns_records", func(req testprovider.Request) testprovider.Response {
@@ -109,21 +109,21 @@ func TestCreateUpdateDeleteUseRecordIDAndPreserveFields(t *testing.T) {
 		if err := json.Unmarshal(req.Body, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body["ttl"] != float64(1) || body["content"] != `"one" "two"` || body["proxied"] != false || body["comment"] != "new comment" {
+		if body["ttl"] != float64(1) || body["content"] != `"one" "two"` || body["comment"] != "new comment" {
 			t.Fatalf("create body = %#v", body)
 		}
 		return testprovider.JSONResponse(http.StatusCreated, envelope(map[string]any{
 			"id": "created", "type": "TXT", "name": "www.example.com", "content": `"one" "two"`, "ttl": 1, "proxied": false, "comment": "new comment",
 		}, nil))
 	})
-	created, err := p.CreateRecord(context.Background(), zone, dns.RecordData{Name: "www.example.com.", Type: "TXT", Value: `"one" "two"`, TTL: dns.TTL{Mode: dns.TTLAutomatic}, Proxied: boolPtr(false), Comment: stringPtr("new comment")})
+	created, err := p.CreateRecord(context.Background(), zone, dns.RecordData{Name: "www.example.com.", Type: "TXT", Value: `"one" "two"`, TTL: dns.TTL{Mode: dns.TTLAutomatic}, Comment: stringPtr("new comment")})
 	if err != nil || created.ID != "created" || created.Value != `"one" "two"` {
 		t.Fatalf("created = %#v, err = %v", created, err)
 	}
 
 	mock.Handle(http.MethodGet, "/zones/zone-a/dns_records/record-a", func(req testprovider.Request) testprovider.Response {
 		return testprovider.JSONResponse(http.StatusOK, envelope(map[string]any{
-			"id": "record-a", "type": "TXT", "name": "www.example.com", "content": `"old" "chunk"`, "ttl": 1, "proxied": false, "comment": "old comment", "tags": []string{"managed"},
+			"id": "record-a", "type": "TXT", "name": "www.example.com", "content": `"old" "chunk"`, "ttl": 1, "comment": "old comment", "tags": []string{"managed"},
 		}, nil))
 	})
 	mock.Handle(http.MethodPatch, "/zones/zone-a/dns_records/record-a", func(req testprovider.Request) testprovider.Response {
@@ -134,7 +134,7 @@ func TestCreateUpdateDeleteUseRecordIDAndPreserveFields(t *testing.T) {
 			"id": "record-a", "type": "TXT", "name": "www.example.com", "content": `"new" "chunk"`, "ttl": 120, "proxied": false, "comment": "updated",
 		}, nil))
 	})
-	after, err := p.UpdateRecord(context.Background(), zone, before, dns.RecordData{Name: "www.example.com.", Type: "TXT", Value: `"new" "chunk"`, TTL: dns.TTL{Mode: dns.TTLExplicit, Seconds: 120}, Proxied: boolPtr(false), Comment: stringPtr("updated"), Extensions: before.Extensions})
+	after, err := p.UpdateRecord(context.Background(), zone, before, dns.RecordData{Name: "www.example.com.", Type: "TXT", Value: `"new" "chunk"`, TTL: dns.TTL{Mode: dns.TTLExplicit, Seconds: 120}, Comment: stringPtr("updated"), Extensions: before.Extensions})
 	if err != nil || after.ID != before.ID || patchBody["comment"] != "updated" || patchBody["content"] != `"new" "chunk"` {
 		t.Fatalf("after = %#v, patch = %#v, err = %v", after, patchBody, err)
 	}
