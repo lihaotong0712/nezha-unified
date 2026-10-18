@@ -2,7 +2,7 @@
 
 本文面向 DNS、证书、凭据、授权和部署模块的实现者，定义这些模块共用的 Go 类型、调用边界和失败行为。契约以 [完整集成方案](DESIGN.md) 为依据。
 
-当前已实现类型、结构校验、授权调用保护、密钥输出脱敏和模块生命周期运行器。`Authorizer`、`Resolver`、`Protector` 和 `Recorder` 是待业务模块实现的接口；尚未提供授权策略存储、凭据数据库、加密算法实现或业务 API。现有哪吒接口、数据库表、ID 编码及认证行为保持原有契约。
+当前代码已经实现公共类型、结构校验、授权调用保护、密钥输出脱敏、资源注册、授权策略、凭据加密存储、证书资产服务、审计持久化和模块生命周期运行器。`internal/resource`、`internal/authz`、`internal/credential`、`internal/certificate` 和 `internal/audit` 均有 GORM/SQLite 适配；Dashboard 已接入证书资产 HTTP API 和管理前端页面。DNS 业务页面、工作流引擎、完整 Certimate 数据迁移以及生产运行时组装仍待接入，不能把这些基础包或证书纵切面表述为完整平台验收。现有哪吒接口、数据库表、ID 编码及认证行为保持原有契约。
 
 ## 包与依赖方向
 
@@ -35,6 +35,8 @@
 
 资源状态为 `pending`、`active`、`disabled`、`deleted`。跨存储关联和授权建立完成前保持 `pending`；只有 `active` 且未软删除的资源可以进入执行路径。`Metadata.Executable` 只检查结构和状态，不代表已授权。
 
+当前 `internal/resource.GORMStore` 将注册表持久化到 `platform_resources`，保存 owner、状态、revision 和软删除时间。更新和删除使用期望 revision 做乐观并发检查；冲突、缺失资源和非法状态不会被转换成成功。凭据、授权和证书存储可以引用该注册表，但尚未由 Dashboard 主进程统一组装所有模块。
+
 删除采用软删除及引用完整性检查。新模块必须在同一权威服务中检查凭据、工作流、部署目标等活动引用；仍被引用时返回 `conflict`，不得级联删除其他模块资产。清理、恢复和物理删除由对应模块制定明确的数据保留策略；本契约不改变哪吒已有表的删除方式。
 
 ## 执行身份与资源授权
@@ -57,6 +59,8 @@
 `Check` 拒绝无效请求、缺失授权服务、零值拒绝结果，以及缺少策略版本的允许结果。策略错误和上下文取消均不能转为允许。`Decision.PolicyVersion` 与 `GrantIDs` 用于审计，不是可以缓存后重放的授权票据。
 
 授权实现需要从当前哪吒用户和 Token 记录加载身份状态、角色、过期、撤销、scope 和主机范围；这里不复制第二套认证数据库。现有 `model.APIToken.HasScope` 和 `CanAccessServer` 可由适配器使用。新业务路由的 PAT scope 必须在该业务接入时显式加入现有签发与校验集合；本次契约不提前扩大现有 scope。
+
+当前 `internal/authz.GORMAuthorizer` 将 grant 持久化到 `platform_policy_grants`，每次判定读取现行策略，并与现有 `api_tokens` 的 scope、过期和 server whitelist 求交集。管理员不会跳过 PAT 限制；空值、格式错误、溢出或不完整的 whitelist 采用 fail-closed。DNS 和证书名称范围按标签边界匹配，不能用未分隔的字符串后缀替代。
 
 | 动作 | 授权语义 |
 |---|---|
@@ -103,9 +107,19 @@
 
 `credential.Secret` 在 JSON、文本、常见 `fmt` 输出及 `slog` 中显示 `[REDACTED]`；`Resolved` 的 JSON 不含密钥字段。适配器只能在回调作用域内使用显式的 `Bytes()`。`Destroy()` 清零其持有的缓冲区，但无法清除 SDK 创建的副本；这些保护不能替代日志审查，也不能阻止调用方主动输出 `Bytes()`。
 
-`Protector` 接口要求认证加密，将凭据资源引用与版本作为关联数据，拒绝密文替换和篡改。存储信封包含 `key_id`、`algorithm`、`nonce` 和 `ciphertext`；密钥由服务端管理并单独备份恢复。后续凭据模块需要实现算法、密钥加载、迁移及真实加密测试；本次未提供可用于存储秘密的具体实现。
+`Protector` 接口要求认证加密，将凭据资源引用与版本作为关联数据，拒绝密文替换和篡改。当前 `AESGCMProtector` 已实现 `AES-GCM` 信封，包含 `key_id`、`algorithm`、`nonce` 和 `ciphertext`，并把凭据 ID、版本和 key ID 纳入 AAD。`Store` 将元数据、绑定、版本和密文分别持久化到 `platform_credentials`、`platform_credential_bindings` 和 `platform_credential_versions`；`WithSecret` 在授权、状态和用途检查后才解密，并在回调返回或 panic 时销毁明文。
+
+生产组装时，AES 密钥必须由独立的 platform key 文件或等价的服务端密钥管理器加载。默认文件路径为数据库路径追加 `.platform.key`，例如 `data/sqlite.db.platform.key`；密钥本身不能写入业务数据库，也不能从 JWT、session secret 或其他用户令牌派生。当前包提供密钥注入、添加和切换能力；密钥文件的配置、轮换编排和主进程恢复流程仍属于运行时接入工作。
 
 轮换产生新的不可变版本，不覆盖旧版本。普通轮换后，已进入回调的操作继续使用本次解析版本；新调用解析新版本。旧固定版本只有在仍被明确保留且未撤销时才可继续解析。停用、删除或撤销版本阻止后续解析；已发送的远端请求需核对结果。删除仍被引用的凭据返回 `conflict`，失效版本返回 `credential_version_invalid`，停用返回 `credential_disabled`。密钥明文导出必须另行检查 `reveal` 或 `export`，不能通过普通解析接口向用户返回。
+
+## 证书资产边界与当前接入状态
+
+`internal/certificate` 已完成上传证书资产的基础纵切面。名称会做空白、大小写、IDNA 和 wildcard 边界校验；`ParsePEM` 只接受一个叶证书 PEM，解析 DNS SAN 和 IP SAN，拒绝无 SAN，并验证证书公钥与私钥匹配。证书元数据投影不含 PEM 或私钥；GORM 元数据保存在 `platform_certificates`，材料保存在独立的 `platform_certificate_materials`，使用 AES-GCM 加密和带资源/角色关联数据的认证信封。
+
+证书服务已经提供创建、列表、详情、证书下载、带额外 `reveal` 授权的私钥下载和删除，并对这些操作重新检查当前授权。敏感操作会记录 requested、succeeded 或 failed 审计事件；下载默认只返回证书，只有显式 `include_private=true`（或兼容的 `private_key=true`）且通过 `download` 与 `reveal` 检查时才追加私钥。Certimate 风格的 legacy certificate 字段有明确导入边界，但尚未完成旧库 fixture 的全量迁移验证。
+
+Dashboard 当前暴露以下证书资产 API：`POST/GET /api/v1/certificates`、`GET /api/v1/certificates/:id`、`GET /api/v1/certificates/:id/download` 和 `DELETE /api/v1/certificates/:id`。HTTP 层保留哪吒现有 `model.CommonResponse` 信封，并由服务层生成安全错误；生产运行时仍需在 `main` 中按数据库路径加载独立 platform key（默认 `<database>.platform.key`，例如 `data/sqlite.db.platform.key`），并注入 GORM store、授权和审计实现。工作流设计器、运行历史、预设和 DNS 页面目前是前端路由骨架或待接入能力，不能据此宣称完整 Certimate 工作流已迁移。
 
 ## Dashboard 模块生命周期
 
@@ -123,7 +137,7 @@
 
 业务接入 Dashboard 时，在 `service/singleton` 完成数据库等依赖初始化后构造模块，完成 API 组装并在监听服务之前启动运行器。在 `main` 的优雅退出回调中，使用独立关闭上下文停止模块，随后才关闭它们依赖的 RPC、数据库及 TSDB。初始化失败后必须先完成模块清理，再退出进程。
 
-当前尚无新增业务模块，因此运行器未挂入 `cmd/dashboard/main.go`，现有哪吒单例初始化与停止流程未重构。首个模块接入时应同时完成这条组装路径，不能在包级 `init()` 中另行启动引擎。
+当前证书服务和 HTTP 控制器已经存在，但尚未挂入 `cmd/dashboard/main.go` 的统一运行器；现有哪吒单例初始化与停止流程也未重构。生产接入时应同时完成依赖组装、按 `<database>.platform.key` 加载独立 platform key、服务注册和优雅退出，不能在包级 `init()` 中另行启动引擎。
 
 如果模块使用已运行的 `singleton.CronShared`，在 `Start` 中登记任务并记录自己的条目 ID，在 `Stop` 中移除这些条目；不关闭其他模块共用的调度器。事件订阅和重试计时器也由所属模块登记和清理。事件触发、定时触发和重试都进入同一个业务应用服务，携带 `Execution` 并重新授权；不得另开绕过权限检查的内部写入入口。本次不引入共享事件总线、全局队列或重试引擎。
 
@@ -146,14 +160,16 @@
 
 `retryable` 只标记超时和暂时不可用；重试前仍需重新授权、检查操作 ID 和远端实际状态。超时不意味着远端未执行，不能据此盲目重复签发、DNS 修改或部署。厂商限流等细分错误由适配器分类，不能从任意响应文本推断可重试性。
 
-当前只定义模块错误结构及状态映射，不改变现有 `model.CommonResponse` 的字符串 `error`。新业务 HTTP 控制器接入时需要显式完成结构化错误到统一响应的映射，并在相应 API 契约中声明；本次不声称已有错误响应端点。
+平台错误结构及状态映射不改变现有 `model.CommonResponse` 的字符串 `error`。证书 HTTP 控制器已将安全错误映射到现有响应信封；其他新业务 HTTP 控制器仍需在接入时显式完成映射，并在相应 API 契约中声明。
 
 审计使用 `audit.Recorder.Record`。每条事件有唯一 `id`，使用 `Execution.OperationID` 关联同一逻辑操作的多次尝试。记录主体、触发者、入口、动作、资源、结果、安全错误码、策略及授权来源、凭据版本和资源版本；事件结构不提供任意请求正文或日志文本字段。
 
 凭据使用、明文读取、轮换、停用、删除、授权变更、运行身份移交、DNS 修改、证书下载及执行操作必须审计。敏感操作在暴露秘密或发送副作用前持久记录意图，再记录成功、拒绝、失败或取消；审计写入失败不能静默忽略。`Recorder` 实现按事件 ID 去重；跨存储提交与结果不确定的恢复由具体应用服务负责。
 
+当前 `internal/audit.GORMRecorder` 将事件持久化到 `platform_audit_events`，按事件 ID 对完全相同的重试幂等处理，对同 ID 不同内容返回冲突，并支持按 `operation_id` 查询同一逻辑操作的尝试。审计事件不包含任意请求正文、厂商响应、URL、脚本或证书私钥字段。
+
 ## 验证边界
 
-`go test -race ./internal/...` 覆盖 ID 无损往返、无效引用、执行状态、拒绝优先的授权调用、派生 PAT 上下文、重新授权、取消、密钥格式化与销毁、安全错误、启动失败清理和并发幂等停止。
+当前 `go test -race ./internal/...` 覆盖 ID 无损往返、无效引用、资源注册和 revision 冲突、拒绝优先的授权调用、PAT scope 与 whitelist 交集、重新授权、取消、凭据 AES-GCM 篡改、密钥格式化与销毁、证书 SAN/私钥匹配和材料分离、审计幂等、启动失败清理和并发幂等停止。Dashboard 侧另有证书 API、路由和前端 fallback 回归测试。
 
-这些测试不等同于完整授权矩阵、数据库加密测试或厂商联调。后续实现需要验证管理员与受限 PAT 的权限交集、子域与通配边界、加密篡改、版本撤销、引用删除、审计持久化，以及真实模块接入 Dashboard 的启动停止行为。
+这些测试不等同于完整平台验收。仍需验证 DNS Dashboard 业务纵切面、Certimate 旧库 fixture 的真实导入、工作流设计/运行/预设 API、完整前后端线上联调、运行时 platform key 文件加载，以及真实厂商联调和部署副作用。

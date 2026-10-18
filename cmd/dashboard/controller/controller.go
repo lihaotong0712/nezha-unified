@@ -436,6 +436,12 @@ func fallbackToFrontend(frontendDist fs.FS) func(*gin.Context) {
 		regexp.MustCompile(`^/dashboard/settings/online-user$`),
 		regexp.MustCompile(`^/dashboard/settings/waf$`),
 		regexp.MustCompile(`^/dashboard/settings/api-tokens$`),
+		regexp.MustCompile(`^/dashboard/certificates$`),
+		regexp.MustCompile(`^/dashboard/certificates/[^/]+$`),
+		regexp.MustCompile(`^/dashboard/certificates/workflows$`),
+		regexp.MustCompile(`^/dashboard/certificates/workflows/[^/]+/design$`),
+		regexp.MustCompile(`^/dashboard/certificates/workflows/[^/]+/runs$`),
+		regexp.MustCompile(`^/dashboard/certificates/presets$`),
 		// 注意：这里的白名单决定哪些 URL 走 index.html fallback；漏一条就会把
 		// 直接刷新该页面变成 404（HTTP 状态码层面，body 仍是 index.html，所以
 		// 浏览器内 SPA 看起来正常，但 monitoring / 链接预览会以为站点挂了）。
