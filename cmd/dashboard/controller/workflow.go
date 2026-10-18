@@ -268,4 +268,3 @@ func transitionWorkflowRun(c *gin.Context) (workflow.Run, error) {
 	}
 	return s.TransitionRun(c.Request.Context(), e, r, p.State, p.Code, p.Message)
 }
-
