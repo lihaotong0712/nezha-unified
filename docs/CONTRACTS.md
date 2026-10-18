@@ -2,7 +2,7 @@
 
 本文面向 DNS、证书、凭据、授权和部署模块的实现者，定义这些模块共用的 Go 类型、调用边界和失败行为。契约以 [完整集成方案](DESIGN.md) 为依据。
 
-当前代码已经实现公共类型、结构校验、授权调用保护、密钥输出脱敏、资源注册、授权策略、凭据加密存储、证书资产服务、审计持久化和模块生命周期运行器。`internal/resource`、`internal/authz`、`internal/credential`、`internal/certificate` 和 `internal/audit` 均有 GORM/SQLite 适配；Dashboard 已接入证书资产 HTTP API、管理前端页面和证书纵切面的生产依赖组装。DNS 业务页面、工作流引擎和完整 Certimate 数据迁移仍待接入，不能把这些基础包或证书纵切面表述为完整平台验收。现有哪吒接口、数据库表、ID 编码及认证行为保持原有契约。
+当前代码已经实现公共类型、结构校验、授权调用保护、密钥输出脱敏、资源注册、授权策略、凭据加密存储、证书资产服务、版本化工作流运行记录、审计持久化和模块生命周期运行器。`internal/resource`、`internal/authz`、`internal/credential`、`internal/certificate`、`internal/workflow` 和 `internal/audit` 均有 GORM/SQLite 适配；Dashboard 已接入证书资产与工作流纵切面的 HTTP API 及生产依赖组装。DNS 业务页面、完整 Certimate 节点执行器和旧库数据迁移仍待接入。现有哪吒接口、数据库表、ID 编码及认证行为保持原有契约。
 
 ## 包与依赖方向
 
@@ -35,7 +35,7 @@
 
 资源状态为 `pending`、`active`、`disabled`、`deleted`。跨存储关联和授权建立完成前保持 `pending`；只有 `active` 且未软删除的资源可以进入执行路径。`Metadata.Executable` 只检查结构和状态，不代表已授权。
 
-当前 `internal/resource.GORMStore` 将注册表持久化到 `platform_resources`，保存 owner、状态、revision 和软删除时间。更新和删除使用期望 revision 做乐观并发检查；冲突、缺失资源和非法状态不会被转换成成功。platform bootstrap 已统一组装资源、授权、审计、凭据和证书存储；DNS、工作流和部署等业务模块仍需接入同一组装边界。
+当前 `internal/resource.GORMStore` 将注册表持久化到 `platform_resources`，保存 owner、状态、revision 和软删除时间。更新和删除使用期望 revision 做乐观并发检查；冲突、缺失资源和非法状态不会被转换成成功。platform bootstrap 已统一组装资源、授权、审计、凭据、证书和工作流存储；DNS 和部署等业务模块仍需接入同一组装边界。
 
 删除采用软删除及引用完整性检查。新模块必须在同一权威服务中检查凭据、工作流、部署目标等活动引用；仍被引用时返回 `conflict`，不得级联删除其他模块资产。清理、恢复和物理删除由对应模块制定明确的数据保留策略；本契约不改变哪吒已有表的删除方式。
 
@@ -119,7 +119,7 @@
 
 证书服务已经提供创建、列表、详情、证书下载、带额外 `reveal` 授权的私钥下载和删除，并对这些操作重新检查当前授权。敏感操作会记录 requested、succeeded 或 failed 审计事件；下载默认只返回证书，只有显式 `include_private=true`（或兼容的 `private_key=true`）且通过 `download` 与 `reveal` 检查时才追加私钥。Certimate 风格的 legacy certificate 字段有明确导入边界，但尚未完成旧库 fixture 的全量迁移验证。
 
-Dashboard 当前暴露以下证书资产 API：`POST/GET /api/v1/certificates`、`GET /api/v1/certificates/:id`、`GET /api/v1/certificates/:id/download` 和 `DELETE /api/v1/certificates/:id`。HTTP 层保留哪吒现有 `model.CommonResponse` 信封，并由服务层生成安全错误；`cmd/dashboard/main.go` 已按数据库路径加载独立 platform key，并注入 GORM store、授权和审计实现。工作流设计器、运行历史、预设和 DNS 页面目前是前端路由骨架或待接入能力，不能据此宣称完整 Certimate 工作流已迁移。
+Dashboard 当前暴露以下证书资产 API：`POST/GET /api/v1/certificates`、`GET /api/v1/certificates/:id`、`GET /api/v1/certificates/:id/download` 和 `DELETE /api/v1/certificates/:id`；工作流 API 覆盖列表、创建、版本保存/发布、启停、运行、运行查询、状态转换和删除。HTTP 层保留哪吒现有 `model.CommonResponse` 信封，并由服务层生成安全错误；`cmd/dashboard/main.go` 已按数据库路径加载独立 platform key，并注入 GORM store、授权、审计、证书和工作流实现。工作流设计器、运行节点输出/日志、预设和 DNS 页面仍是前端路由骨架或待接入能力，不能据此宣称完整 Certimate 工作流已迁移。
 
 ## Dashboard 模块生命周期
 
@@ -137,7 +137,7 @@ Dashboard 当前暴露以下证书资产 API：`POST/GET /api/v1/certificates`�
 
 业务接入 Dashboard 时，在 `service/singleton` 完成数据库等依赖初始化后构造模块，完成 API 组装并在监听服务之前启动运行器。在 `main` 的优雅退出回调中，使用独立关闭上下文停止模块，随后才关闭它们依赖的 RPC、数据库及 TSDB。初始化失败后必须先完成模块清理，再退出进程。
 
-当前证书服务和 HTTP 控制器已经挂入 `cmd/dashboard/main.go` 的依赖组装，主进程在监听前完成数据库迁移、platform key 加载、服务注册和证书服务注入，并在优雅退出时先停止 HTTP/HTTPS，再关闭依赖它们的运行时资源。工作流和其他业务模块仍应按同一生命周期边界接入，不能在包级 `init()` 中另行启动引擎。
+当前证书和工作流服务及 HTTP 控制器已经挂入 `cmd/dashboard/main.go` 的依赖组装，主进程在监听前完成数据库迁移、platform key 加载、服务注册和服务注入，并在优雅退出时先停止 HTTP/HTTPS，再关闭依赖它们的运行时资源。工作流执行器和其他业务模块仍应按同一生命周期边界接入，不能在包级 `init()` 中另行启动引擎。
 
 如果模块使用已运行的 `singleton.CronShared`，在 `Start` 中登记任务并记录自己的条目 ID，在 `Stop` 中移除这些条目；不关闭其他模块共用的调度器。事件订阅和重试计时器也由所属模块登记和清理。事件触发、定时触发和重试都进入同一个业务应用服务，携带 `Execution` 并重新授权；不得另开绕过权限检查的内部写入入口。本次不引入共享事件总线、全局队列或重试引擎。
 
@@ -172,4 +172,4 @@ Dashboard 当前暴露以下证书资产 API：`POST/GET /api/v1/certificates`�
 
 当前 `go test -race ./internal/...` 覆盖 ID 无损往返、无效引用、资源注册和 revision 冲突、拒绝优先的授权调用、PAT scope 与 whitelist 交集、重新授权、取消、凭据 AES-GCM 篡改、密钥格式化与销毁、证书 SAN/私钥匹配和材料分离、证书材料跨重启恢复、稳定 platform key 缺失失败、审计幂等、启动失败清理和并发幂等停止。Dashboard 侧另有证书 API、路由和前端 fallback 回归测试。
 
-这些测试不等同于完整平台验收。仍需验证 DNS Dashboard 业务纵切面、Certimate 旧库 fixture 的真实导入、工作流设计/运行/预设 API、完整前后端线上联调、密钥备份与轮换演练，以及真实厂商联调和部署副作用。
+这些测试不等同于完整平台验收。仍需验证 DNS Dashboard 业务纵切面、Certimate 旧库 fixture 的真实导入、工作流设计器与节点输出/日志/预设 API、完整前后端线上联调、密钥备份与轮换演练，以及真实厂商联调和部署副作用。

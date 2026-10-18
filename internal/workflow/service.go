@@ -172,6 +172,35 @@ func (s *Service) Publish(ctx context.Context, e authz.Execution, ref resource.R
 	}
 	return out, nil
 }
+
+// SetState enables or disables a published workflow. Draft workflows must be
+// published first so execution always has an immutable version to snapshot.
+func (s *Service) SetState(ctx context.Context, e authz.Execution, ref resource.Ref, state State) (Workflow, error) {
+	if state != StateActive && state != StateDisabled {
+		return Workflow{}, platformerr.New(platformerr.InvalidArgument, e.OperationID, ErrInvalidWorkflow)
+	}
+	if _, err := s.check(ctx, e, authz.Edit, ref); err != nil {
+		return Workflow{}, err
+	}
+	w, err := s.store.Get(ctx, ref)
+	if err != nil {
+		return Workflow{}, platformerr.From(err, e.OperationID)
+	}
+	if w.State == StateDeleted || w.CurrentVersion == 0 {
+		return Workflow{}, platformerr.New(platformerr.Conflict, e.OperationID, ErrDisabled)
+	}
+	if w.State == state {
+		return w, nil
+	}
+	w.State = state
+	w.UpdatedAt = s.now().UTC()
+	out, err := s.store.Update(ctx, w, w.Revision)
+	if err != nil {
+		return Workflow{}, platformerr.From(err, e.OperationID)
+	}
+	return out, nil
+}
+
 func (s *Service) Delete(ctx context.Context, e authz.Execution, ref resource.Ref) error {
 	w, err := s.store.Get(ctx, ref)
 	if err != nil {

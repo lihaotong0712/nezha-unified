@@ -183,6 +183,20 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.PATCH("/nat/:id", restScopeMiddleware(model.ScopeNATWrite), commonHandler(updateNAT))
 	auth.POST("/batch-delete/nat", restScopeMiddleware(model.ScopeNATDelete), commonHandler(batchDeleteNAT))
 
+	// Versioned certificate workflows and immutable execution snapshots.
+	auth.GET("/certificates/workflows", restScopeMiddleware(model.ScopeWorkflowRead), commonHandler(listWorkflows))
+	auth.POST("/certificates/workflows", restScopeMiddleware(model.ScopeWorkflowWrite), commonHandler(createWorkflow))
+	auth.GET("/certificates/workflows/:id", restScopeMiddleware(model.ScopeWorkflowRead), commonHandler(getWorkflow))
+	auth.GET("/certificates/workflows/:id/versions", restScopeMiddleware(model.ScopeWorkflowRead), commonHandler(listWorkflowVersions))
+	auth.POST("/certificates/workflows/:id/versions", restScopeMiddleware(model.ScopeWorkflowWrite), commonHandler(saveWorkflowVersion))
+	auth.POST("/certificates/workflows/:id/publish", restScopeMiddleware(model.ScopeWorkflowWrite), commonHandler(publishWorkflow))
+	auth.POST("/certificates/workflows/:id/state", restScopeMiddleware(model.ScopeWorkflowWrite), commonHandler(setWorkflowState))
+	auth.POST("/certificates/workflows/:id/runs", restScopeMiddleware(model.ScopeWorkflowExec), commonHandler(startWorkflowRun))
+	auth.GET("/certificates/workflows/:id/runs", restScopeMiddleware(model.ScopeWorkflowRead), commonHandler(listWorkflowRuns))
+	auth.GET("/certificates/workflow-runs/:id", restScopeMiddleware(model.ScopeWorkflowRead), commonHandler(getWorkflowRun))
+	auth.POST("/certificates/workflow-runs/:id/transition", restScopeMiddleware(model.ScopeWorkflowExec), commonHandler(transitionWorkflowRun))
+	auth.DELETE("/certificates/workflows/:id", restScopeMiddleware(model.ScopeWorkflowDelete), commonHandler(deleteWorkflow))
+
 	// certificate assets are backed by the unified certificate service. The
 	// service performs the resource-level authorization checks; the PAT scope
 	// middleware below is only the outer capability gate for this REST entry.

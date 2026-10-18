@@ -87,6 +87,11 @@ const (
 	ScopeCertificateDownload = "nezha:certificate:download"
 	ScopeCertificateReveal   = "nezha:certificate:reveal"
 
+	ScopeWorkflowRead   = "nezha:workflow:read"
+	ScopeWorkflowWrite  = "nezha:workflow:write"
+	ScopeWorkflowDelete = "nezha:workflow:delete"
+	ScopeWorkflowExec   = "nezha:workflow:exec"
+
 	ScopeAdminAll = "nezha:admin:*"
 )
 
@@ -103,6 +108,7 @@ var AllScopes = []string{
 	ScopeTransferRead, ScopeTransferWrite, ScopeTransferDelete,
 	ScopeCertificateRead, ScopeCertificateWrite, ScopeCertificateDelete,
 	ScopeCertificateDownload, ScopeCertificateReveal,
+	ScopeWorkflowRead, ScopeWorkflowWrite, ScopeWorkflowDelete, ScopeWorkflowExec,
 
 	"nezha:inventory:*",
 	"nezha:server:*",
