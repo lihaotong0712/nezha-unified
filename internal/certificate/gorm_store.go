@@ -159,17 +159,62 @@ func (s *GORMStore) Delete(ctx context.Context, ref resource.Ref) error {
 	if s == nil || s.db == nil || ref.Kind != resource.Certificate || ref.Validate() != nil {
 		return ErrNotFound
 	}
+	var current certificateRow
+	if err := s.db.WithContext(ctx).First(&current, "ref_id = ?", ref.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+	certificatePEM, privateKeyPEM, err := s.materials.Get(ctx, ref)
+	if err != nil {
+		return err
+	}
+	defer clear(certificatePEM)
+	defer clear(privateKeyPEM)
+	if err := s.materials.Delete(ctx, ref); err != nil {
+		if restoreErr := s.restoreMaterialIfMetadataPresent(ctx, ref, certificatePEM, privateKeyPEM); restoreErr != nil {
+			return errors.Join(err, restoreErr)
+		}
+		return err
+	}
 	result := s.db.WithContext(ctx).Delete(&certificateRow{}, "ref_id = ?", ref.ID)
 	if result.Error != nil {
+		// The material store is outside the metadata transaction. Restore the
+		// material only when the metadata row is still present; if the delete
+		// actually committed and merely returned an error, restoring it would
+		// leave an orphaned secret.
+		if restoreErr := s.restoreMaterialIfMetadataPresent(ctx, ref, certificatePEM, privateKeyPEM); restoreErr != nil {
+			return errors.Join(result.Error, restoreErr)
+		}
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return ErrNotFound
 	}
-	if err := s.materials.Delete(ctx, ref); err != nil {
-		return err
-	}
 	return nil
+}
+
+func (s *GORMStore) restoreMaterialIfMetadataPresent(ctx context.Context, ref resource.Ref, certificatePEM, privateKeyPEM []byte) error {
+	var current certificateRow
+	lookupErr := s.db.WithContext(context.WithoutCancel(ctx)).First(&current, "ref_id = ?", ref.ID).Error
+	if lookupErr != nil {
+		// A missing row means the metadata delete committed. For an unknown
+		// lookup failure, leave the material deleted rather than risk creating
+		// an orphan secret while the metadata state is uncertain.
+		return nil
+	}
+	return restoreCertificateMaterial(ctx, s.materials, ref, certificatePEM, privateKeyPEM)
+}
+
+func restoreCertificateMaterial(ctx context.Context, materials ProtectedMaterialStore, ref resource.Ref, certificatePEM, privateKeyPEM []byte) error {
+	err := materials.Put(context.WithoutCancel(ctx), ref, certificatePEM, privateKeyPEM)
+	// A failed Delete may have left the original material in place. A conflict
+	// therefore means the desired post-failure state is already restored.
+	if errors.Is(err, ErrConflict) {
+		return nil
+	}
+	return err
 }
 
 func (s *GORMStore) Bundle(ctx context.Context, ref resource.Ref, includePrivate bool) (Bundle, error) {

@@ -55,6 +55,15 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 	if s == nil || s.store == nil || req.OwnerID == 0 || req.Source == "" {
 		return Record{}, platformerr.New(platformerr.InvalidArgument, req.Execution.OperationID, nil)
 	}
+	// Interactive requests are bound to the owner they can create for. This
+	// keeps a dashboard session or PAT from turning an otherwise authorized
+	// create grant into a cross-tenant owner assignment. Background execution
+	// may still use a policy grant to create on behalf of another owner.
+	if (req.Execution.Entry == authz.Session || req.Execution.Entry == authz.PAT) &&
+		req.Execution.Subject.Kind == authz.UserPrincipal &&
+		req.Execution.Subject.ID != authz.User(req.OwnerID).ID {
+		return Record{}, platformerr.New(platformerr.Forbidden, req.Execution.OperationID, nil)
+	}
 	parsed, err := ParsePEM(req.CertificatePEM, req.PrivateKeyPEM)
 	if err != nil {
 		return Record{}, platformerr.New(platformerr.InvalidArgument, req.Execution.OperationID, err)
