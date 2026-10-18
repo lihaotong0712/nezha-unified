@@ -33,5 +33,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/admin/package-lock.json
       - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: false
       - name: 执行本地与 CI 共用检查
         run: make ci
