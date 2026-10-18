@@ -84,4 +84,4 @@ make ci
 | `internal/authz` | 哪吒用户与资源授权 |
 | `internal/deployment` | 部署目标与 Agent 调用协作 |
 
-这些目录在业务实现时创建。证书页面直接迁入 `web/admin`，复用哪吒路由、登录会话和 API。不得新增独立 Certimate 应用、PocketBase 登录入口或第二套管理前端。
+资源引用、凭据解析、授权、生命周期、错误与审计的基础接口已定义，见 [公共契约](CONTRACTS.md)。具体业务模块按该契约实现，不在各模块内另建密钥存储或独立授权入口。证书页面直接迁入 `web/admin`，复用哪吒路由、登录会话和 API。不得新增独立 Certimate 应用、PocketBase 登录入口或第二套管理前端。
