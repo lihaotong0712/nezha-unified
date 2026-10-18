@@ -52,6 +52,7 @@ CI 使用 `ubuntu-26.04` runner，运行与本地相同的检查入口，只检�
 - [开发指南](docs/DEVELOPMENT.md)：分支规范、命令和检查范围。
 - [公共契约](docs/CONTRACTS.md)：资源引用、凭据解析、统一授权、模块生命周期、错误与审计边界。
 - [完整集成方案](docs/DESIGN.md)：最终集成目标与实施约束。
+- [DNS 厂商能力矩阵](docs/DNS_PROVIDER_MATRIX.md)与 [Go 接口草案](docs/DNS_PROVIDER_CONTRACT.md)：厂商差异、适配边界和后续验证要求。
 - [上游来源](docs/UPSTREAM.md)：固定版本、源码位置和许可证。
 
 分支采用 `master` → `dev` → `feat/*`：功能分支从 `dev` 创建，合入 `dev` 验证后再合入 `master`。
