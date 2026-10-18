@@ -183,6 +183,15 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.PATCH("/nat/:id", restScopeMiddleware(model.ScopeNATWrite), commonHandler(updateNAT))
 	auth.POST("/batch-delete/nat", restScopeMiddleware(model.ScopeNATDelete), commonHandler(batchDeleteNAT))
 
+	// certificate assets are backed by the unified certificate service. The
+	// service performs the resource-level authorization checks; the PAT scope
+	// middleware below is only the outer capability gate for this REST entry.
+	auth.GET("/certificates", restScopeMiddleware(model.ScopeCertificateRead), commonHandler(listCertificates))
+	auth.GET("/certificates/:id", restScopeMiddleware(model.ScopeCertificateRead), commonHandler(getCertificate))
+	auth.POST("/certificates", restScopeMiddleware(model.ScopeCertificateWrite), commonHandler(createCertificate))
+	auth.GET("/certificates/:id/download", restScopeMiddleware(model.ScopeCertificateRead), downloadCertificate)
+	auth.DELETE("/certificates/:id", restScopeMiddleware(model.ScopeCertificateDelete), commonHandler(deleteCertificate))
+
 	// 管理员资源 — 仅 nezha:* / nezha:admin:* 持有者可调（adminHandler 进一步校验 user.Role）。
 	auth.GET("/user", restScopeMiddleware(model.ScopeAdminAll), adminHandler(listUser))
 	auth.POST("/user", restScopeMiddleware(model.ScopeAdminAll), adminHandler(createUser))
