@@ -64,7 +64,7 @@ func canonicalRoutes() []scopedRoute {
 		{"GET", "/api/v1/certificates", "nezha:certificate:read"},
 		{"GET", "/api/v1/certificates/{id}", "nezha:certificate:read"},
 		{"POST", "/api/v1/certificates", "nezha:certificate:write"},
-		{"GET", "/api/v1/certificates/{id}/download", "nezha:certificate:read"},
+		{"GET", "/api/v1/certificates/{id}/download", "nezha:certificate:download"},
 		{"DELETE", "/api/v1/certificates/{id}", "nezha:certificate:delete"},
 
 		{"GET", "/api/v1/service/list", "nezha:service:read"},

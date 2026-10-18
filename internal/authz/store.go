@@ -342,6 +342,17 @@ func (a *GORMAuthorizer) loadPAT(ctx context.Context, id uint64, subject Princip
 	if err != nil || owner == 0 || row.UserID != owner || row.ExpiresAt != nil && !row.ExpiresAt.After(time.Now().UTC()) {
 		return nil, errors.New("PAT is not active for subject")
 	}
+	// A token is subordinate to its user account. The authentication layer may
+	// have loaded the token before the account was deleted, so checking only the
+	// token row would let a residual token and grant keep authorizing requests.
+	// Treat a missing users table or row as unavailable identity state and fail
+	// closed; production databases always create users before this authorizer.
+	var user struct {
+		ID uint64
+	}
+	if err := a.db.WithContext(ctx).Table("users").Select("id").Where("id = ?", owner).First(&user).Error; err != nil {
+		return nil, err
+	}
 	// Parse the complete whitelist before evaluating the request. A malformed
 	// value must never become an unrestricted token merely because the current
 	// request targets a non-server resource.

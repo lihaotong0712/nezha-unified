@@ -252,6 +252,63 @@ func TestCertificatePATDoesNotInheritAdminRole(t *testing.T) {
 	}
 }
 
+func TestCertificatePATDownloadAndRevealScopes(t *testing.T) {
+	db := newPlatformTestDB(t)
+	keyPath := t.TempDir() + "/platform.key"
+	if err := db.Create(&model.User{Common: model.Common{ID: 7}, Username: "certificate-pat", Role: model.RoleMember}).Error; err != nil {
+		t.Fatal(err)
+	}
+	services, err := NewServices(db, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putCertificateGrant(t, services, 7, "certificate-pat-download-reveal", authz.Download, authz.Reveal)
+	certificatePEM, privateKeyPEM := platformTestCertificate(t)
+	record, err := services.Certificates.Create(context.Background(), certificate.CreateRequest{
+		Execution: platformSession(7, "certificate-pat-scopes-create"), OwnerID: 7, Name: "pat-scopes", Source: certificate.SourceUpload,
+		CertificatePEM: certificatePEM, PrivateKeyPEM: privateKeyPEM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	putCertificatePAT(t, db, 103, 7, model.ScopeCertificateRead)
+	if _, err := services.Certificates.Download(context.Background(), platformPAT(7, 103, "certificate-pat-read-only"), record.Ref, false); !certificateErrorIsForbidden(err) {
+		t.Fatalf("read-only PAT download = %v, want forbidden", err)
+	}
+
+	putCertificatePAT(t, db, 104, 7, model.ScopeCertificateDownload)
+	public, err := services.Certificates.Download(context.Background(), platformPAT(7, 104, "certificate-pat-download"), record.Ref, false)
+	if err != nil {
+		t.Fatalf("download PAT public material = %v", err)
+	}
+	if string(public.Certificate) != string(certificatePEM) || len(public.PrivateKey) != 0 {
+		t.Fatalf("download PAT public bundle = certificate %d bytes, private %d bytes", len(public.Certificate), len(public.PrivateKey))
+	}
+	if _, err := services.Certificates.Download(context.Background(), platformPAT(7, 104, "certificate-pat-download-without-reveal"), record.Ref, true); !certificateErrorIsForbidden(err) {
+		t.Fatalf("download-only PAT private material = %v, want forbidden", err)
+	}
+
+	putCertificatePAT(t, db, 105, 7, model.ScopeCertificateDownload+","+model.ScopeCertificateReveal)
+	private, err := services.Certificates.Download(context.Background(), platformPAT(7, 105, "certificate-pat-download-reveal"), record.Ref, true)
+	if err != nil {
+		t.Fatalf("download+reveal PAT private material = %v", err)
+	}
+	if string(private.Certificate) != string(certificatePEM) || string(private.PrivateKey) != string(privateKeyPEM) {
+		t.Fatal("download+reveal PAT did not recover the complete certificate bundle")
+	}
+
+	putCertificatePAT(t, db, 106, 7, model.ScopeCertificateReveal)
+	if _, err := services.Certificates.Download(context.Background(), platformPAT(7, 106, "certificate-pat-reveal-only"), record.Ref, false); !certificateErrorIsForbidden(err) {
+		t.Fatalf("reveal-only PAT public material = %v, want forbidden", err)
+	}
+}
+
+func certificateErrorIsForbidden(err error) bool {
+	var forbidden *platformerr.Error
+	return errorAs(err, &forbidden) && forbidden.Code == platformerr.Forbidden
+}
+
 func TestDeletedUserSessionAndPATAreRejected(t *testing.T) {
 	db := newPlatformTestDB(t)
 	keyPath := t.TempDir() + "/platform.key"

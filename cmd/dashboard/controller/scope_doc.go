@@ -13,7 +13,7 @@
 //	nezha:{resource}:{verb}
 //	  resource: inventory | server | service | alertrule | cron | ddns | nat |
 //	            notification | notification-group | transfer | certificate | admin
-//	  verb:     read | write | delete | exec
+//	  verb:     read | write | delete | download | reveal | exec
 //
 //	inventory vs server：inventory 管“能看到/能删哪些机器”（列出 server /
 //	server-group、删除 server / server-group、MCP server.list）；server 管对
@@ -68,7 +68,7 @@
 //	GET    /api/v1/certificates                      nezha:certificate:read
 //	GET    /api/v1/certificates/{id}                 nezha:certificate:read
 //	POST   /api/v1/certificates                      nezha:certificate:write
-//	GET    /api/v1/certificates/{id}/download        nezha:certificate:read
+//	GET    /api/v1/certificates/{id}/download        nezha:certificate:download
 //	DELETE /api/v1/certificates/{id}                 nezha:certificate:delete
 //
 //	GET    /api/v1/service/list                      nezha:service:read

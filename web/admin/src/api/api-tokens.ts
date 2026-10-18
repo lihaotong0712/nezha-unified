@@ -157,6 +157,32 @@ export const SCOPE_OPTIONS = [
     },
     { value: "nezha:transfer:*", label: "Transfer: all", desc: "Every transfer permission" },
     {
+        value: "nezha:certificate:read",
+        label: "Certificate: read",
+        desc: "List and inspect certificates",
+    },
+    {
+        value: "nezha:certificate:write",
+        label: "Certificate: write",
+        desc: "Upload and edit certificates",
+    },
+    {
+        value: "nezha:certificate:delete",
+        label: "Certificate: delete",
+        desc: "Delete certificates",
+    },
+    {
+        value: "nezha:certificate:download",
+        label: "Certificate: download",
+        desc: "Download public certificate material",
+    },
+    {
+        value: "nezha:certificate:reveal",
+        label: "Certificate: reveal",
+        desc: "Download certificate private keys",
+    },
+    { value: "nezha:certificate:*", label: "Certificate: all", desc: "Every certificate permission" },
+    {
         value: "nezha:admin:*",
         label: "Admin: all (admin only)",
         desc: "User / WAF / Setting / Online-user management",

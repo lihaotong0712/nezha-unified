@@ -81,9 +81,11 @@ const (
 	ScopeTransferWrite  = "nezha:transfer:write"
 	ScopeTransferDelete = "nezha:transfer:delete"
 
-	ScopeCertificateRead   = "nezha:certificate:read"
-	ScopeCertificateWrite  = "nezha:certificate:write"
-	ScopeCertificateDelete = "nezha:certificate:delete"
+	ScopeCertificateRead     = "nezha:certificate:read"
+	ScopeCertificateWrite    = "nezha:certificate:write"
+	ScopeCertificateDelete   = "nezha:certificate:delete"
+	ScopeCertificateDownload = "nezha:certificate:download"
+	ScopeCertificateReveal   = "nezha:certificate:reveal"
 
 	ScopeAdminAll = "nezha:admin:*"
 )
@@ -100,6 +102,7 @@ var AllScopes = []string{
 	ScopeNotificationGroupRead, ScopeNotificationGroupWrite, ScopeNotificationGroupDelete,
 	ScopeTransferRead, ScopeTransferWrite, ScopeTransferDelete,
 	ScopeCertificateRead, ScopeCertificateWrite, ScopeCertificateDelete,
+	ScopeCertificateDownload, ScopeCertificateReveal,
 
 	"nezha:inventory:*",
 	"nezha:server:*",

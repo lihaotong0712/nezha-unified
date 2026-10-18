@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nezhahq/nezha/internal/resource"
+	"github.com/nezhahq/nezha/model"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -25,7 +26,10 @@ func newAuthzStoreTest(t *testing.T) *GORMAuthorizer {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&patRecord{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &patRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.User{Common: model.Common{ID: 7}, Username: "authz-test"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	authorizer, err := NewGORMAuthorizer(db)
@@ -33,6 +37,28 @@ func newAuthzStoreTest(t *testing.T) *GORMAuthorizer {
 		t.Fatal(err)
 	}
 	return authorizer
+}
+
+func TestGORMAuthorizerRejectsPATAfterUserDeletion(t *testing.T) {
+	authorizer := newAuthzStoreTest(t)
+	if err := authorizer.PutGrant(context.Background(), serverGrant("grant-deleted-user", 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.db.Create(&patRecord{ID: 16, UserID: 7, ScopesCSV: "nezha:server:read", ServersCSV: "2"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := Request{Execution: Execution{Subject: User(7), TriggeredBy: User(7), Entry: PAT, TokenID: 16, OperationID: "deleted-user-pat"}, Action: View, Resource: resource.Ref{Kind: resource.Server, ID: "2"}}
+	decision, err := authorizer.Authorize(context.Background(), request)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("active user PAT decision = %+v, %v; expected allow", decision, err)
+	}
+	if err := authorizer.db.Delete(&model.User{}, 7).Error; err != nil {
+		t.Fatal(err)
+	}
+	decision, err = authorizer.Authorize(context.Background(), request)
+	if err != nil || decision.Allowed {
+		t.Fatalf("deleted user PAT decision = %+v, %v; expected fail-closed denial", decision, err)
+	}
 }
 
 func serverGrant(id string, serverIDs ...uint64) PolicyGrant {

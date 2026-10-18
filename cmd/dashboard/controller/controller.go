@@ -189,7 +189,7 @@ func routers(r *gin.Engine, frontendDist fs.FS) {
 	auth.GET("/certificates", restScopeMiddleware(model.ScopeCertificateRead), commonHandler(listCertificates))
 	auth.GET("/certificates/:id", restScopeMiddleware(model.ScopeCertificateRead), commonHandler(getCertificate))
 	auth.POST("/certificates", restScopeMiddleware(model.ScopeCertificateWrite), commonHandler(createCertificate))
-	auth.GET("/certificates/:id/download", restScopeMiddleware(model.ScopeCertificateRead), downloadCertificate)
+	auth.GET("/certificates/:id/download", restScopeMiddleware(model.ScopeCertificateDownload), downloadCertificate)
 	auth.DELETE("/certificates/:id", restScopeMiddleware(model.ScopeCertificateDelete), commonHandler(deleteCertificate))
 
 	// 管理员资源 — 仅 nezha:* / nezha:admin:* 持有者可调（adminHandler 进一步校验 user.Role）。
