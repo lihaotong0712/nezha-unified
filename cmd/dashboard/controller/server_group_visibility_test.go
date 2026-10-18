@@ -1,0 +1,205 @@
+package controller
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/patrickmn/go-cache"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
+	"github.com/nezhahq/nezha/model"
+	"github.com/nezhahq/nezha/pkg/i18n"
+	"github.com/nezhahq/nezha/service/singleton"
+)
+
+func setupServerGroupVisibilityFixture(t *testing.T) {
+	t.Helper()
+
+	originalDB := singleton.DB
+	originalCache := singleton.Cache
+	originalLoc := singleton.Loc
+	originalLocalizer := singleton.Localizer
+	originalServer := singleton.ServerShared
+	originalUserInfo := singleton.UserInfoMap
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Server{}, &model.ServerGroup{}, &model.ServerGroupServer{}, &model.User{}))
+
+	singleton.DB = db
+	singleton.Loc = time.UTC
+	singleton.Cache = cache.New(time.Minute, time.Minute)
+	singleton.Localizer = i18n.NewLocalizer("en_US", "nezha", "translations", i18n.Translations)
+	singleton.UserLock.Lock()
+	singleton.UserInfoMap = map[uint64]model.UserInfo{
+		1:   {Role: model.RoleAdmin},
+		200: {Role: model.RoleMember},
+	}
+	singleton.UserLock.Unlock()
+
+	require.NoError(t, db.Create(&model.Server{Common: model.Common{ID: 1, UserID: 1}, Name: "public", UUID: "public", HideForGuest: false}).Error)
+	require.NoError(t, db.Create(&model.Server{Common: model.Common{ID: 2, UserID: 1}, Name: "hidden", UUID: "hidden", HideForGuest: true}).Error)
+
+	require.NoError(t, db.Create(&model.ServerGroup{Common: model.Common{ID: 10, UserID: 1}, Name: "Public Group"}).Error)
+	require.NoError(t, db.Create(&model.ServerGroup{Common: model.Common{ID: 11, UserID: 1}, Name: "Empty Group"}).Error)
+	require.NoError(t, db.Create(&model.ServerGroupServer{Common: model.Common{UserID: 1}, ServerGroupId: 10, ServerId: 1}).Error)
+
+	singleton.ServerShared = singleton.NewServerClass()
+
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+		singleton.DB = originalDB
+		singleton.Cache = originalCache
+		singleton.Loc = originalLoc
+		singleton.Localizer = originalLocalizer
+		singleton.ServerShared = originalServer
+		singleton.UserLock.Lock()
+		singleton.UserInfoMap = originalUserInfo
+		singleton.UserLock.Unlock()
+	})
+}
+
+func newServerGroupCtx(viewer *model.User) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/api/v1/server-group", nil)
+	if viewer != nil {
+		c.Set(model.CtxKeyAuthorizedUser, viewer)
+	}
+	return c
+}
+
+func collectGroupNames(items []*model.ServerGroupResponseItem) []string {
+	names := make([]string, 0, len(items))
+	for _, it := range items {
+		names = append(names, it.Group.Name)
+	}
+	return names
+}
+
+func TestListServerGroupGuestSkipsGroupsWithoutVisibleServers(t *testing.T) {
+	setupServerGroupVisibilityFixture(t)
+
+	items, err := listServerGroup(newServerGroupCtx(nil))
+	require.NoError(t, err)
+	names := collectGroupNames(items)
+
+	assert.ElementsMatch(t, []string{"Public Group"}, names,
+		"a group with no guest-visible servers is meaningless to a guest UI and exposing its name leaks the existence of empty/hidden-only groups")
+}
+
+func TestListServerGroupAuthenticatedMemberSeesOwnEmptyGroup(t *testing.T) {
+	setupServerGroupVisibilityFixture(t)
+
+	require.NoError(t, singleton.DB.Create(&model.ServerGroup{Common: model.Common{ID: 12, UserID: 200}, Name: "member empty group"}).Error)
+
+	items, err := listServerGroup(newServerGroupCtx(&model.User{
+		Common: model.Common{ID: 200},
+		Role:   model.RoleMember,
+	}))
+	require.NoError(t, err)
+	names := collectGroupNames(items)
+
+	assert.Contains(t, names, "member empty group", "owner must still see their own empty group")
+}
+
+func TestListServerGroupAdminSeesAllGroupsIncludingEmpty(t *testing.T) {
+	setupServerGroupVisibilityFixture(t)
+
+	items, err := listServerGroup(newServerGroupCtx(&model.User{
+		Common: model.Common{ID: 1},
+		Role:   model.RoleAdmin,
+	}))
+	require.NoError(t, err)
+	names := collectGroupNames(items)
+
+	assert.ElementsMatch(t, []string{"Public Group", "Empty Group"}, names,
+		"admin must keep full visibility, including empty groups")
+}
+
+func newServerGroupCtxWithPAT(viewer *model.User, tok *model.APIToken) *gin.Context {
+	c := newServerGroupCtx(viewer)
+	if tok != nil {
+		c.Set(model.CtxKeyAPIToken, tok)
+	}
+	return c
+}
+
+// PAT scoped to server_ids must hide groups whose membership is entirely
+// outside the whitelist and must strip out-of-whitelist server IDs from
+// remaining groups. Otherwise admin-issued limited PATs still enumerate
+// every group name + server id via /api/v1/server-group.
+func TestListServerGroupPATWhitelistFiltersGroupsAndServerIDs(t *testing.T) {
+	setupServerGroupVisibilityFixture(t)
+
+	require.NoError(t, singleton.DB.Create(&model.ServerGroupServer{
+		Common: model.Common{UserID: 1}, ServerGroupId: 10, ServerId: 2,
+	}).Error)
+
+	tok := &model.APIToken{ID: 77, UserID: 1}
+	tok.SetServerIDs([]uint64{1})
+
+	items, err := listServerGroup(newServerGroupCtxWithPAT(&model.User{
+		Common: model.Common{ID: 1}, Role: model.RoleAdmin,
+	}, tok))
+	require.NoError(t, err)
+
+	names := collectGroupNames(items)
+	assert.ElementsMatch(t, []string{"Public Group"}, names,
+		"PAT scoped to {1} must drop the empty group and not surface group names containing only server 2")
+
+	if assert.Len(t, items, 1) {
+		assert.ElementsMatch(t, []uint64{1}, items[0].Servers,
+			"server IDs outside the PAT whitelist must be redacted from the response")
+	}
+}
+
+func TestListServerGroupPATWithDisjointWhitelistReturnsEmpty(t *testing.T) {
+	setupServerGroupVisibilityFixture(t)
+
+	tok := &model.APIToken{ID: 78, UserID: 1}
+	tok.SetServerIDs([]uint64{9999})
+
+	items, err := listServerGroup(newServerGroupCtxWithPAT(&model.User{
+		Common: model.Common{ID: 1}, Role: model.RoleAdmin,
+	}, tok))
+	require.NoError(t, err)
+	assert.Empty(t, items, "PAT scoped to a server it cannot reach must see no groups, not all of them")
+}
+
+// batchDeleteServerGroup must refuse to delete a group whose members are not
+// entirely covered by the PAT whitelist; otherwise an admin's limited PAT can
+// drop groups that touch servers outside its scope.
+func TestBatchDeleteServerGroupRejectsPATOutsideWhitelist(t *testing.T) {
+	setupServerGroupVisibilityFixture(t)
+	require.NoError(t, singleton.DB.Create(&model.ServerGroupServer{
+		Common: model.Common{UserID: 1}, ServerGroupId: 10, ServerId: 2,
+	}).Error)
+
+	tok := &model.APIToken{ID: 79, UserID: 1}
+	tok.SetServerIDs([]uint64{1})
+
+	c := newServerGroupCtxWithPAT(&model.User{
+		Common: model.Common{ID: 1}, Role: model.RoleAdmin,
+	}, tok)
+	body, _ := json.Marshal([]uint64{10})
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/batch-delete/server-group", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	_, err := batchDeleteServerGroup(c)
+	require.Error(t, err, "PAT scoped to {1} must not delete group 10 which still contains server 2")
+
+	var remaining int64
+	require.NoError(t, singleton.DB.Model(&model.ServerGroup{}).Where("id = ?", 10).Count(&remaining).Error)
+	assert.Equal(t, int64(1), remaining, "group 10 must remain after refused PAT delete")
+}
