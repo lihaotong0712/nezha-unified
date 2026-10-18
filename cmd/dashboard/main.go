@@ -22,6 +22,7 @@ import (
 	"github.com/nezhahq/nezha/cmd/dashboard/controller"
 	"github.com/nezhahq/nezha/cmd/dashboard/controller/waf"
 	"github.com/nezhahq/nezha/cmd/dashboard/rpc"
+	"github.com/nezhahq/nezha/internal/platform"
 	"github.com/nezhahq/nezha/model"
 	"github.com/nezhahq/nezha/pkg/idcodec"
 	"github.com/nezhahq/nezha/pkg/utils"
@@ -128,6 +129,7 @@ func main() {
 	}
 
 	serviceSentinelDispatchBus := make(chan *model.Service)
+	var platformServices *platform.Services
 	if err := utils.FirstError(singleton.InitFrontendTemplates,
 		func() error { return singleton.InitConfigFromPath(dashboardCliParam.ConfigFile) },
 		initIDCodec,
@@ -140,10 +142,16 @@ func main() {
 			return nil
 		},
 		func() error { return singleton.InitDBFromPath(dashboardCliParam.DatabaseLocation) },
+		func() error {
+			var err error
+			platformServices, err = platform.NewServices(singleton.DB, dashboardCliParam.DatabaseLocation+".platform.key")
+			return err
+		},
 		singleton.InitTSDB,
 		func() error { return initSystem(serviceSentinelDispatchBus) }); err != nil {
 		log.Fatal(err)
 	}
+	controller.SetCertificateService(platformServices.Certificates)
 
 	l, err := openDashboardListener("tcp", dashboardListenerAddress(singleton.Conf.ListenHost, singleton.Conf.ListenPort), dashboardHTTPListener)
 	if err != nil {
@@ -209,15 +217,16 @@ func main() {
 		return <-errChan
 	}, func(c context.Context) error {
 		log.Println("NEZHA>> Graceful::START")
+		var httpShutdownErr, httpsShutdownErr error
+		if muxServerHTTPS != nil {
+			httpsShutdownErr = muxServerHTTPS.Shutdown(c)
+		}
+		httpShutdownErr = muxServerHTTP.Shutdown(c)
 		rpc.CloseReceiptGate()
 		singleton.RecordTransferHourlyUsage()
 		singleton.CloseTSDB()
 		log.Println("NEZHA>> Graceful::END")
-		var err error
-		if muxServerHTTPS != nil {
-			err = muxServerHTTPS.Shutdown(c)
-		}
-		return errors.Join(muxServerHTTP.Shutdown(c), utils.IfOr(err != nil, utils.NewWrapError(errHTTPS, err), nil))
+		return errors.Join(httpShutdownErr, utils.IfOr(httpsShutdownErr != nil, utils.NewWrapError(errHTTPS, httpsShutdownErr), nil))
 	}); err != nil {
 		log.Printf("NEZHA>> ERROR: %v", err)
 		var wrapError *utils.WrapError
