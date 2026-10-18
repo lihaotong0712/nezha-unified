@@ -278,7 +278,7 @@ func TestGORMStoreDeleteKeepsMetadataWhenMaterialDeleteFails(t *testing.T) {
 }
 
 func TestGORMStoreDeleteRestoresMaterialWhenMetadataDeleteFails(t *testing.T) {
-	materials := new(fakeProtectedMaterialStore)
+	materials := &fakeProtectedMaterialStore{deleteBytes: true}
 	store, db, record, certificatePEM, privateKeyPEM := newGORMCertificateFixture(t, materials)
 	metadataErr := errors.New("metadata delete failed")
 	callbackName := "test-certificate-metadata-delete-failure"
