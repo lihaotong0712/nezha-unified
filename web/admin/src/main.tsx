@@ -31,6 +31,7 @@ import TransferPage from "./routes/transfer"
 import UserPage from "./routes/user"
 import WAFPage from "./routes/waf"
 import ApiTokensPage from "./routes/api-tokens"
+import { moduleRoutes } from "./routes/modules/routes"
 
 const router = createBrowserRouter([
     {
@@ -44,6 +45,7 @@ const router = createBrowserRouter([
         ),
         errorElement: <ErrorPage />,
         children: [
+            ...moduleRoutes,
             {
                 path: "/dashboard/login",
                 element: <LoginPage />,
