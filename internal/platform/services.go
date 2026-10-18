@@ -192,8 +192,17 @@ func loadOrCreateKey(db *gorm.DB, path string) ([]byte, error) {
 		return data, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("platform: read stable key file: %w", err)
-	} else if hasEncryptedPlatformData(db) {
-		return nil, errors.New("platform: encrypted data exists but stable key file is missing")
+	} else {
+		encrypted, probeErr := hasEncryptedPlatformData(db)
+		if probeErr != nil {
+			// A failed probe is an unavailable identity/key state. Creating a
+			// replacement key in that situation could strand existing ciphertext
+			// while making startup appear successful.
+			return nil, fmt.Errorf("platform: inspect encrypted data: %w", probeErr)
+		}
+		if encrypted {
+			return nil, errors.New("platform: encrypted data exists but stable key file is missing")
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, fmt.Errorf("platform: create stable key directory: %w", err)
@@ -218,17 +227,31 @@ func loadOrCreateKey(db *gorm.DB, path string) ([]byte, error) {
 	return key, nil
 }
 
-func hasEncryptedPlatformData(db *gorm.DB) bool {
+func hasEncryptedPlatformData(db *gorm.DB) (bool, error) {
+	if db == nil {
+		return false, errors.New("platform: database is required")
+	}
+	tables, err := db.Migrator().GetTables()
+	if err != nil {
+		return false, err
+	}
+	existing := make(map[string]bool, len(tables))
+	for _, table := range tables {
+		existing[table] = true
+	}
 	for _, table := range []string{"platform_credential_versions", "platform_certificate_materials"} {
-		if !db.Migrator().HasTable(table) {
+		if !existing[table] {
 			continue
 		}
 		var count int64
-		if db.Table(table).Count(&count).Error == nil && count > 0 {
-			return true
+		if err := db.Table(table).Count(&count).Error; err != nil {
+			return false, err
+		}
+		if count > 0 {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func clearBytes(value []byte) {
